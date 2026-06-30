@@ -33,6 +33,33 @@ import {
 // Instrument presets config
 const INSTRUMENT_PRESETS = [
   {
+    id: 'acoustic_piano',
+    name: 'Grand Piano',
+    settings: {
+      preset: 'acoustic_piano',
+      waveType: 'piano' as WaveType,
+      attack: 0.002,
+      decay: 1.2,
+      sustain: 0.15,
+      release: 0.35,
+      filterCutoff: 8000,
+      filterResonance: 1.0,
+      distortion: 0.0,
+      delayTime: 0.25,
+      delayFeedback: 0.08,
+      reverbWet: 0.25,
+      volume: 0.9,
+      polyphonic: true,
+      octaveOffset: 0,
+      unisonVoices: 1,
+      unisonDetune: 0,
+      voiceBoxEnabled: false,
+      voiceBoxVowel: 'A' as const,
+      voiceBoxModRate: 1.5,
+      voiceBoxModDepth: 0.5,
+    }
+  },
+  {
     id: 'saw_lead',
     name: 'Saw Lead',
     settings: {
@@ -51,6 +78,12 @@ const INSTRUMENT_PRESETS = [
       volume: 0.8,
       polyphonic: false,
       octaveOffset: 0,
+      unisonVoices: 1,
+      unisonDetune: 0,
+      voiceBoxEnabled: false,
+      voiceBoxVowel: 'O' as const,
+      voiceBoxModRate: 2.0,
+      voiceBoxModDepth: 0.6,
     }
   },
   {
@@ -72,6 +105,12 @@ const INSTRUMENT_PRESETS = [
       volume: 0.75,
       polyphonic: true,
       octaveOffset: 0,
+      unisonVoices: 3,
+      unisonDetune: 12,
+      voiceBoxEnabled: true, // Lush vocal pad
+      voiceBoxVowel: 'U' as const,
+      voiceBoxModRate: 0.6,
+      voiceBoxModDepth: 0.75,
     }
   },
   {
@@ -93,6 +132,12 @@ const INSTRUMENT_PRESETS = [
       volume: 0.65,
       polyphonic: true,
       octaveOffset: 0,
+      unisonVoices: 1,
+      unisonDetune: 0,
+      voiceBoxEnabled: false,
+      voiceBoxVowel: 'E' as const,
+      voiceBoxModRate: 3.5,
+      voiceBoxModDepth: 0.4,
     }
   },
   {
@@ -114,6 +159,12 @@ const INSTRUMENT_PRESETS = [
       volume: 0.9,
       polyphonic: false,
       octaveOffset: -1,
+      unisonVoices: 1,
+      unisonDetune: 0,
+      voiceBoxEnabled: false,
+      voiceBoxVowel: 'A' as const,
+      voiceBoxModRate: 1.0,
+      voiceBoxModDepth: 0.3,
     }
   },
   {
@@ -135,6 +186,12 @@ const INSTRUMENT_PRESETS = [
       volume: 0.8,
       polyphonic: true,
       octaveOffset: 0,
+      unisonVoices: 1,
+      unisonDetune: 0,
+      voiceBoxEnabled: false,
+      voiceBoxVowel: 'I' as const,
+      voiceBoxModRate: 2.0,
+      voiceBoxModDepth: 0.5,
     }
   }
 ];

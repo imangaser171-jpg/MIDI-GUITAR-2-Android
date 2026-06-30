@@ -1,4 +1,4 @@
-export type WaveType = 'sine' | 'square' | 'sawtooth' | 'triangle' | 'noise';
+export type WaveType = 'sine' | 'square' | 'sawtooth' | 'triangle' | 'noise' | 'piano';
 
 export interface SynthSettings {
   preset: string;
@@ -16,6 +16,12 @@ export interface SynthSettings {
   volume: number; // 0 to 1
   polyphonic: boolean;
   octaveOffset: number; // -2 to 2
+  unisonVoices: number; // 1 to 7
+  unisonDetune: number; // 0 to 50 cents
+  voiceBoxEnabled: boolean;
+  voiceBoxVowel: 'A' | 'E' | 'I' | 'O' | 'U';
+  voiceBoxModRate: number; // 0 to 10 Hz for auto-morphing talkbox sweep
+  voiceBoxModDepth: number; // 0 to 1 for morph depth
 }
 
 export interface MidiMessageLog {
