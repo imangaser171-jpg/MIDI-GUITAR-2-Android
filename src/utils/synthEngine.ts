@@ -1,486 +1,533 @@
-import { WaveType, SynthSettings } from '../types';
+import { SynthSettings } from '../types';
 
-interface ActiveOscillator {
+interface ActiveVoiceOscillator {
   node: OscillatorNode;
-  frequencyRatio: number;
+  initialFreq: number;
 }
 
 interface ActiveVoice {
-  oscs: ActiveOscillator[];
+  oscs: ActiveVoiceOscillator[];
   gainNode: GainNode;
   filterNode: BiquadFilterNode;
   startTime: number;
-  midiNote: number;
+  modulators?: AudioNode[];
+  baseMidiNote: number;
 }
 
-export class SynthEngine {
+export class PolySynth {
   private ctx: AudioContext | null = null;
   private settings: SynthSettings;
-  private activeVoices: Map<number, ActiveVoice> = new Map();
-  
-  // Audio FX nodes (shared or master)
+  private voices: Map<number, ActiveVoice> = new Map();
   private masterGain: GainNode | null = null;
   private delayNode: DelayNode | null = null;
-  private delayFeedbackGain: GainNode | null = null;
-  private reverbNode: ConvolverNode | null = null;
-  private reverbWetGain: GainNode | null = null;
-  private reverbDryGain: GainNode | null = null;
-  private distortionNode: WaveShaperNode | null = null;
+  private delayFeedback: GainNode | null = null;
+  private delayGain: GainNode | null = null;
 
-  // Voice Box (Formant Filter) FX nodes
-  private voiceBoxInput: GainNode | null = null;
-  private voiceBoxDryGain: GainNode | null = null;
-  private voiceBoxOutput: GainNode | null = null;
-  private voiceBoxFilters: BiquadFilterNode[] = [];
-  private voiceBoxFilterGains: GainNode[] = [];
-  private voiceBoxLfo: OscillatorNode | null = null;
-  private voiceBoxLfoGain: GainNode | null = null;
-  
-  constructor(initialSettings: SynthSettings) {
-    this.settings = initialSettings;
+  constructor(settings: SynthSettings) {
+    this.settings = settings;
   }
 
-  public init(audioContext: AudioContext) {
-    this.ctx = audioContext;
-    const now = this.ctx.currentTime;
+  private initAudio() {
+    if (this.ctx) return;
     
-    // Create master routing chain
+    // Create audio context
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    this.ctx = new AudioContextClass();
+    
+    // Master Gain
     this.masterGain = this.ctx.createGain();
-    this.masterGain.gain.setValueAtTime(this.settings.volume, now);
+    this.masterGain.gain.setValueAtTime(this.settings.volume, this.ctx.currentTime);
     
-    // Create Distortion Node
-    this.distortionNode = this.ctx.createWaveShaper();
-    this.updateDistortionCurve();
-
-    // Create Delay Nodes
+    // Setup Delay Echo effect Nodes
     this.delayNode = this.ctx.createDelay(2.0);
-    this.delayFeedbackGain = this.ctx.createGain();
+    this.delayFeedback = this.ctx.createGain();
+    this.delayGain = this.ctx.createGain();
     
-    this.delayNode.delayTime.setValueAtTime(this.settings.delayTime, now);
-    this.delayFeedbackGain.gain.setValueAtTime(this.settings.delayFeedback, now);
+    const dTime = this.settings.delayTime !== undefined ? this.settings.delayTime : 0.35;
+    const dFb = this.settings.delayFeedback !== undefined ? this.settings.delayFeedback : 0.4;
+    const dWet = this.settings.delayWet !== undefined ? this.settings.delayWet : 0.25;
+    const dEnabled = this.settings.delayEnabled !== undefined ? this.settings.delayEnabled : false;
+    
+    this.delayNode.delayTime.setValueAtTime(dTime, this.ctx.currentTime);
+    this.delayFeedback.gain.setValueAtTime(dFb, this.ctx.currentTime);
+    this.delayGain.gain.setValueAtTime(dEnabled ? dWet : 0, this.ctx.currentTime);
     
     // Connect Delay feedback loop
-    this.delayNode.connect(this.delayFeedbackGain);
-    this.delayFeedbackGain.connect(this.delayNode);
-
-    // Create Reverb Node
-    this.reverbNode = this.ctx.createConvolver();
-    this.reverbWetGain = this.ctx.createGain();
-    this.reverbDryGain = this.ctx.createGain();
-    this.updateReverbBuffer();
-
-    // Reverb dry/wet gains
-    this.reverbWetGain.gain.setValueAtTime(this.settings.reverbWet, now);
-    this.reverbDryGain.gain.setValueAtTime(1 - this.settings.reverbWet, now);
-
-    // Create Voice Box Formant Filter Nodes
-    this.voiceBoxInput = this.ctx.createGain();
-    this.voiceBoxDryGain = this.ctx.createGain();
-    this.voiceBoxOutput = this.ctx.createGain();
-
-    this.voiceBoxFilters = [
-      this.ctx.createBiquadFilter(),
-      this.ctx.createBiquadFilter(),
-      this.ctx.createBiquadFilter()
-    ];
-    this.voiceBoxFilterGains = [
-      this.ctx.createGain(),
-      this.ctx.createGain(),
-      this.ctx.createGain()
-    ];
-
-    // Configure individual formant filters
-    this.voiceBoxFilters.forEach((filter, index) => {
-      filter.type = 'bandpass';
-      filter.Q.setValueAtTime(10, now); // high resonance for vocals
-      
-      filter.connect(this.voiceBoxFilterGains[index]);
-      this.voiceBoxFilterGains[index].connect(this.voiceBoxOutput!);
-      
-      this.voiceBoxInput!.connect(filter);
-    });
-
-    this.voiceBoxInput.connect(this.voiceBoxDryGain);
-    this.voiceBoxDryGain.connect(this.voiceBoxOutput);
-
-    // Create LFO to modulate formant detuning (gender/wah morph sweep)
-    this.voiceBoxLfo = this.ctx.createOscillator();
-    this.voiceBoxLfo.type = 'sine';
-    this.voiceBoxLfo.frequency.setValueAtTime(this.settings.voiceBoxModRate || 0.0, now);
-
-    this.voiceBoxLfoGain = this.ctx.createGain();
-    this.voiceBoxLfoGain.gain.setValueAtTime((this.settings.voiceBoxModDepth || 0.0) * 1000, now);
-
-    this.voiceBoxLfo.connect(this.voiceBoxLfoGain);
-
-    // Connect LFO detune modulation to each formant bandpass filter
-    this.voiceBoxFilters.forEach(filter => {
-      this.voiceBoxLfoGain!.connect(filter.detune);
-    });
-
-    this.voiceBoxLfo.start(now);
-
-    // Apply active Voice Box parameter state
-    this.applyVoiceBoxSettings();
-
-    // Assembly of master FX chain:
-    // Source -> DistortionNode -> VoiceBoxInput -> VoiceBoxOutput -> ReverbDry & ReverbConvolver
-    // ReverbConvolver -> ReverbWet
-    // Source -> DelayNode -> MasterGain
-    this.distortionNode.connect(this.voiceBoxInput);
-    this.voiceBoxOutput.connect(this.reverbDryGain);
-    this.voiceBoxOutput.connect(this.reverbNode);
-    this.reverbNode.connect(this.reverbWetGain);
+    this.delayNode.connect(this.delayFeedback);
+    this.delayFeedback.connect(this.delayNode);
     
-    // Connect both dry and wet and delay to master gain
-    this.reverbDryGain.connect(this.masterGain);
-    this.reverbWetGain.connect(this.masterGain);
-    this.delayNode.connect(this.masterGain);
-    
-    // Connect master gain to destination
+    // Dry Out
     this.masterGain.connect(this.ctx.destination);
-  }
-
-  private applyVoiceBoxSettings() {
-    if (!this.ctx || !this.voiceBoxDryGain || !this.voiceBoxFilters || !this.voiceBoxLfo || !this.voiceBoxLfoGain) return;
-
-    const now = this.ctx.currentTime;
-    const enabled = this.settings.voiceBoxEnabled;
-    const vowel = this.settings.voiceBoxVowel || 'A';
-    const rate = this.settings.voiceBoxModRate;
-    const depth = this.settings.voiceBoxModDepth;
-
-    // Smoothly update LFO frequency and gain
-    this.voiceBoxLfo.frequency.setTargetAtTime(rate, now, 0.1);
-    this.voiceBoxLfoGain.gain.setTargetAtTime(depth * 1000, now, 0.1); // range 0 to 1000 cents detune modulation
-
-    if (!enabled) {
-      // Bypass: Dry is 1, Wet (filter outputs) is 0
-      this.voiceBoxDryGain.gain.setTargetAtTime(1.0, now, 0.05);
-      this.voiceBoxFilterGains.forEach(g => {
-        g.gain.setTargetAtTime(0.0, now, 0.05);
-      });
-    } else {
-      // Active Voice Box: Dry is 0, Wet is 1
-      this.voiceBoxDryGain.gain.setTargetAtTime(0.0, now, 0.05);
-      // Equalized formant gains for clear projection
-      const formantGains = [1.2, 0.7, 0.4];
-      this.voiceBoxFilterGains.forEach((g, index) => {
-        g.gain.setTargetAtTime(formantGains[index], now, 0.05);
-      });
-
-      // Update formant frequencies matching vocal vowel sounds
-      const freqs = {
-        A: [730, 1090, 2440],
-        E: [530, 1840, 2480],
-        I: [270, 2290, 3010],
-        O: [570, 840, 2410],
-        U: [300, 870, 2240]
-      }[vowel] || [730, 1090, 2440];
-
-      this.voiceBoxFilters.forEach((filter, index) => {
-        filter.frequency.setTargetAtTime(freqs[index], now, 0.1);
-      });
-    }
+    
+    // Wet Out
+    this.masterGain.connect(this.delayNode);
+    this.delayNode.connect(this.delayGain);
+    this.delayGain.connect(this.ctx.destination);
   }
 
   public updateSettings(newSettings: SynthSettings) {
-    const oldVolume = this.settings.volume;
-    const oldDelayTime = this.settings.delayTime;
-    const oldDelayFeedback = this.settings.delayFeedback;
-    const oldReverbWet = this.settings.reverbWet;
-    const oldDistortion = this.settings.distortion;
-
-    const oldVoiceBoxEnabled = this.settings.voiceBoxEnabled;
-    const oldVoiceBoxVowel = this.settings.voiceBoxVowel;
-    const oldVoiceBoxModRate = this.settings.voiceBoxModRate;
-    const oldVoiceBoxModDepth = this.settings.voiceBoxModDepth;
-
-    this.settings = { ...newSettings };
+    this.settings = newSettings;
+    if (this.ctx && this.masterGain) {
+      this.masterGain.gain.setTargetAtTime(this.settings.volume, this.ctx.currentTime, 0.02);
+    }
     
+    // Update Delay parameters in real-time
+    if (this.ctx && this.delayNode && this.delayFeedback && this.delayGain) {
+      const dTime = this.settings.delayTime !== undefined ? this.settings.delayTime : 0.35;
+      const dFb = this.settings.delayFeedback !== undefined ? this.settings.delayFeedback : 0.4;
+      const dWet = this.settings.delayWet !== undefined ? this.settings.delayWet : 0.25;
+      const dEnabled = this.settings.delayEnabled !== undefined ? this.settings.delayEnabled : false;
+      
+      const now = this.ctx.currentTime;
+      this.delayNode.delayTime.setTargetAtTime(dTime, now, 0.05);
+      this.delayFeedback.gain.setTargetAtTime(dFb, now, 0.05);
+      this.delayGain.gain.setTargetAtTime(dEnabled ? dWet : 0, now, 0.05);
+    }
+  }
+
+  private midiToFreq(note: number): number {
+    return 440 * Math.pow(2, (note - 69) / 12);
+  }
+
+  private getHarmonizerOffsets(mode: string): number[] {
+    switch (mode) {
+      case 'octave-up': return [12];
+      case 'octave-down': return [-12];
+      case 'fifth': return [7];
+      case 'fourth': return [5];
+      case 'power': return [7, 12];
+      case 'major-triad': return [4, 7];
+      case 'minor-triad': return [3, 7];
+      default: return [];
+    }
+  }
+
+  private generateOscillatorsForPitch(
+    freq: number,
+    type: string,
+    filterNode: BiquadFilterNode,
+    oscs: ActiveVoiceOscillator[],
+    modulators: AudioNode[],
+    now: number
+  ) {
     if (!this.ctx) return;
 
-    const now = this.ctx.currentTime;
+    if (type === 'unison') {
+      const detunes = [-15, 0, 15];
+      detunes.forEach((detuneVal) => {
+        const o = this.ctx!.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.setValueAtTime(freq, now);
+        o.detune.setValueAtTime(detuneVal, now);
+        o.connect(filterNode);
+        o.start(now);
+        oscs.push({ node: o, initialFreq: freq });
+      });
+    } else if (type === 'strings') {
+      const detunes = [-10, 0, 10];
+      detunes.forEach((detuneVal) => {
+        const o = this.ctx!.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.setValueAtTime(freq, now);
+        o.detune.setValueAtTime(detuneVal, now);
+        o.connect(filterNode);
+        o.start(now);
+        oscs.push({ node: o, initialFreq: freq });
+      });
+    } else if (type === 'sax') {
+      const o1 = this.ctx.createOscillator();
+      o1.type = 'sawtooth';
+      o1.frequency.setValueAtTime(freq, now);
+      o1.connect(filterNode);
+      o1.start(now);
+      oscs.push({ node: o1, initialFreq: freq });
 
-    // Apply main volume
-    if (this.masterGain && oldVolume !== this.settings.volume) {
-      this.masterGain.gain.linearRampToValueAtTime(this.settings.volume, now + 0.05);
-    }
+      const o2 = this.ctx.createOscillator();
+      o2.type = 'triangle';
+      o2.frequency.setValueAtTime(freq, now);
+      o2.connect(filterNode);
+      o2.start(now);
+      oscs.push({ node: o2, initialFreq: freq });
 
-    // Apply delay params
-    if (this.delayNode && oldDelayTime !== this.settings.delayTime) {
-      this.delayNode.delayTime.setValueAtTime(this.settings.delayTime, now);
-    }
-    if (this.delayFeedbackGain && oldDelayFeedback !== this.settings.delayFeedback) {
-      this.delayFeedbackGain.gain.setValueAtTime(this.settings.delayFeedback, now);
-    }
+      const lfo = this.ctx.createOscillator();
+      const lfoGain = this.ctx.createGain();
+      lfo.frequency.setValueAtTime(5.5, now);
+      lfoGain.gain.setValueAtTime(3.8, now);
 
-    // Apply reverb dry/wet
-    if (this.reverbWetGain && this.reverbDryGain && oldReverbWet !== this.settings.reverbWet) {
-      this.reverbWetGain.gain.setValueAtTime(this.settings.reverbWet, now);
-      this.reverbDryGain.gain.setValueAtTime(1 - this.settings.reverbWet, now);
-    }
+      lfo.connect(lfoGain);
+      lfoGain.connect(o1.frequency);
+      lfoGain.connect(o2.frequency);
 
-    // Apply distortion curve
-    if (oldDistortion !== this.settings.distortion) {
-      this.updateDistortionCurve();
-    }
+      lfo.start(now);
+      modulators.push(lfo);
+    } else if (type === 'violin') {
+      const o = this.ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(freq, now);
+      o.connect(filterNode);
+      o.start(now);
+      oscs.push({ node: o, initialFreq: freq });
 
-    // Apply Voice Box settings
-    if (oldVoiceBoxEnabled !== this.settings.voiceBoxEnabled || 
-        oldVoiceBoxVowel !== this.settings.voiceBoxVowel || 
-        oldVoiceBoxModRate !== this.settings.voiceBoxModRate || 
-        oldVoiceBoxModDepth !== this.settings.voiceBoxModDepth) {
-      this.applyVoiceBoxSettings();
-    }
-  }
+      const lfo = this.ctx.createOscillator();
+      const lfoGain = this.ctx.createGain();
+      lfo.frequency.setValueAtTime(6.0, now);
+      lfoGain.gain.setValueAtTime(2.8, now);
 
-  private updateDistortionCurve() {
-    if (!this.distortionNode) return;
-    const amount = this.settings.distortion * 100; // Map 0-1 to 0-100
-    if (amount <= 0) {
-      this.distortionNode.curve = null;
-      return;
-    }
-    const n_samples = 44100;
-    const curve = new Float32Array(n_samples);
-    const deg = Math.PI / 180;
-    for (let i = 0; i < n_samples; ++i) {
-      const x = (i * 2) / n_samples - 1;
-      curve[i] = ((3 + amount) * x * 20 * deg) / (Math.PI + amount * Math.abs(x));
-    }
-    this.distortionNode.curve = curve;
-  }
+      lfo.connect(lfoGain);
+      lfoGain.connect(o.frequency);
 
-  private updateReverbBuffer() {
-    if (!this.ctx || !this.reverbNode) return;
-    
-    // Generate an impulse response algorithmically
-    const sampleRate = this.ctx.sampleRate;
-    const duration = 2.0; // 2 seconds reverb
-    const decay = 2.5; // decay factor
-    const length = sampleRate * duration;
-    const impulse = this.ctx.createBuffer(2, length, sampleRate);
-    
-    for (let channel = 0; channel < 2; channel++) {
-      const channelData = impulse.getChannelData(channel);
-      for (let i = 0; i < length; i++) {
-        // White noise decaying exponentially
-        channelData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
-      }
-    }
-    
-    this.reverbNode.buffer = impulse;
-  }
+      lfo.start(now);
+      modulators.push(lfo);
+    } else if (type === 'nylon') {
+      const o = this.ctx.createOscillator();
+      o.type = 'triangle';
+      o.frequency.setValueAtTime(freq * 1.015, now);
+      o.frequency.exponentialRampToValueAtTime(freq, now + 0.035);
+      o.connect(filterNode);
+      o.start(now);
+      oscs.push({ node: o, initialFreq: freq * 1.015 });
 
-  public noteOn(midiNote: number, velocity: number = 0.8) {
-    if (!this.ctx || !this.distortionNode || !this.delayNode) return;
+      const oPluck = this.ctx.createOscillator();
+      oPluck.type = 'sine';
+      oPluck.frequency.setValueAtTime(freq * 3, now);
+      
+      const pluckGain = this.ctx.createGain();
+      pluckGain.gain.setValueAtTime(0.2, now);
+      pluckGain.gain.exponentialRampToValueAtTime(0.001, now + 0.015);
 
-    // Apply octave shift
-    const shiftedMidiNote = midiNote + (this.settings.octaveOffset * 12);
-    if (shiftedMidiNote < 0 || shiftedMidiNote > 127) return;
+      oPluck.connect(pluckGain);
+      pluckGain.connect(filterNode);
+      oPluck.start(now);
+      oscs.push({ node: oPluck, initialFreq: freq * 3 });
+    } else if (type === 'piano') {
+      const o1 = this.ctx.createOscillator();
+      o1.type = 'triangle';
+      o1.frequency.setValueAtTime(freq, now);
+      o1.connect(filterNode);
+      o1.start(now);
+      oscs.push({ node: o1, initialFreq: freq });
 
-    // If monophonic, shut off all other voices first
-    if (!this.settings.polyphonic) {
-      this.allNotesOff();
-    }
+      const o2 = this.ctx.createOscillator();
+      o2.type = 'sine';
+      o2.frequency.setValueAtTime(freq * 2, now);
+      const g2 = this.ctx.createGain();
+      g2.gain.setValueAtTime(0.35, now);
+      g2.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+      o2.connect(g2);
+      g2.connect(filterNode);
+      o2.start(now);
+      oscs.push({ node: o2, initialFreq: freq * 2 });
 
-    // Prevent double-triggering same midi note
-    if (this.activeVoices.has(shiftedMidiNote)) {
-      this.noteOff(shiftedMidiNote);
-    }
+      const o3 = this.ctx.createOscillator();
+      o3.type = 'sine';
+      o3.frequency.setValueAtTime(freq * 3, now);
+      const g3 = this.ctx.createGain();
+      g3.gain.setValueAtTime(0.18, now);
+      g3.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+      o3.connect(g3);
+      g3.connect(filterNode);
+      o3.start(now);
+      oscs.push({ node: o3, initialFreq: freq * 3 });
+    } else if (type === 'bass') {
+      const oSub = this.ctx.createOscillator();
+      oSub.type = 'sine';
+      oSub.frequency.setValueAtTime(freq * 0.5, now);
+      const subGain = this.ctx.createGain();
+      subGain.gain.setValueAtTime(0.45, now);
+      oSub.connect(subGain);
+      subGain.connect(filterNode);
+      oSub.start(now);
+      oscs.push({ node: oSub, initialFreq: freq * 0.5 });
 
-    const now = this.ctx.currentTime;
-    const frequency = 440 * Math.pow(2, (shiftedMidiNote - 69) / 12);
+      const oCharacter = this.ctx.createOscillator();
+      oCharacter.type = 'triangle';
+      oCharacter.frequency.setValueAtTime(freq, now);
+      const charGain = this.ctx.createGain();
+      charGain.gain.setValueAtTime(0.3, now);
+      oCharacter.connect(charGain);
+      charGain.connect(filterNode);
+      oCharacter.start(now);
+      oscs.push({ node: oCharacter, initialFreq: freq });
 
-    // Create custom Gain Node for ADSR envelope
-    const voiceGain = this.ctx.createGain();
-    voiceGain.gain.setValueAtTime(0, now);
-    
-    // Attack phase: linear ramp to peak volume
-    const attackTime = Math.max(0.002, this.settings.attack);
-    const peakVolume = velocity;
-    voiceGain.gain.linearRampToValueAtTime(peakVolume, now + attackTime);
-    
-    // Decay phase: exponential ramp to sustain volume
-    const decayTime = Math.max(0.002, this.settings.decay);
-    const sustainVolume = peakVolume * this.settings.sustain;
-    voiceGain.gain.setTargetAtTime(sustainVolume, now + attackTime, decayTime);
-
-    // Create Filter Node for this voice
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(this.settings.filterCutoff, now);
-    filter.Q.setValueAtTime(this.settings.filterResonance, now);
-
-    // Audio routing helper and list of oscillator objects to play
-    const oscs: ActiveOscillator[] = [];
-
-    // Define sound components (fundamental + harmonics) based on waveType
-    interface SoundComponent {
-      type: OscillatorType;
-      frequencyRatio: number;
-      gainRatio: number;
-      detuneOffset: number;
-      isHammer?: boolean;
-    }
-
-    const components: SoundComponent[] = [];
-
-    if (this.settings.waveType === 'piano') {
-      // Elegant multi-harmonic piano model with stretch tuning detune offsets
-      components.push(
-        { type: 'sine', frequencyRatio: 1.0, gainRatio: 0.7, detuneOffset: 0 },
-        { type: 'sine', frequencyRatio: 2.0, gainRatio: 0.35, detuneOffset: 2 },
-        { type: 'sine', frequencyRatio: 3.0, gainRatio: 0.15, detuneOffset: 4 },
-        { type: 'triangle', frequencyRatio: 4.0, gainRatio: 0.08, detuneOffset: 6 },
-        { type: 'sine', frequencyRatio: 8.1, gainRatio: 0.25, detuneOffset: 12, isHammer: true }
-      );
+      const oPluck = this.ctx.createOscillator();
+      oPluck.type = 'sawtooth';
+      oPluck.frequency.setValueAtTime(freq * 3, now);
+      const pluckGain = this.ctx.createGain();
+      pluckGain.gain.setValueAtTime(0.15, now);
+      pluckGain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
+      oPluck.connect(pluckGain);
+      pluckGain.connect(filterNode);
+      oPluck.start(now);
+      oscs.push({ node: oPluck, initialFreq: freq * 3 });
     } else {
-      // Standard wave type single oscillator
-      const wave = this.settings.waveType === 'noise' ? 'triangle' : this.settings.waveType;
-      components.push({
-        type: wave as OscillatorType,
-        frequencyRatio: 1.0,
-        gainRatio: 1.0,
-        detuneOffset: 0
+      const o = this.ctx.createOscillator();
+      o.type = type as any;
+      o.frequency.setValueAtTime(freq, now);
+      o.connect(filterNode);
+      o.start(now);
+      oscs.push({ node: o, initialFreq: freq });
+    }
+  }
+
+  public noteOn(note: number, velocity = 100) {
+    this.initAudio();
+    if (!this.ctx || !this.masterGain) return;
+
+    // If note is already playing, release it first
+    if (this.voices.has(note)) {
+      this.noteOff(note);
+    }
+
+    const now = this.ctx.currentTime;
+    
+    // Apply Pitch Shifter / Transposition here
+    const shiftedBaseNote = note + (this.settings.pitchShift || 0);
+
+    // Create components
+    const filterNode = this.ctx.createBiquadFilter();
+    const gainNode = this.ctx.createGain();
+
+    // Arrays to track all created audio nodes for this voice
+    const oscs: ActiveVoiceOscillator[] = [];
+    const modulators: AudioNode[] = [];
+
+    // Configure Filter
+    filterNode.type = 'lowpass';
+    filterNode.frequency.setValueAtTime(this.settings.cutoff, now);
+    filterNode.Q.setValueAtTime(this.settings.Q, now);
+
+    const type = this.settings.oscType;
+
+    // Harmonizer Offsets
+    const offsets = [0, ...this.getHarmonizerOffsets(this.settings.harmonizerMode || 'off')];
+
+    // Generate oscillators for fundamental note + harmonizer notes
+    offsets.forEach((offset) => {
+      const currentNote = shiftedBaseNote + offset;
+      const freq = this.midiToFreq(currentNote) * Math.pow(2, (this.settings.fineTune || 0) / 1200);
+      this.generateOscillatorsForPitch(freq, type, filterNode, oscs, modulators, now);
+    });
+
+    // Handle instrument-specific filter sweeps
+    if (type === 'strings') {
+      filterNode.frequency.setValueAtTime(400, now);
+      filterNode.frequency.exponentialRampToValueAtTime(this.settings.cutoff, now + Math.max(0.1, this.settings.attack * 2));
+    } else if (type === 'sax') {
+      filterNode.frequency.setValueAtTime(800, now);
+      filterNode.frequency.linearRampToValueAtTime(2400, now + 0.15);
+    } else if (type === 'violin') {
+      filterNode.frequency.setValueAtTime(1000, now);
+      filterNode.frequency.exponentialRampToValueAtTime(this.settings.cutoff, now + 0.1);
+    } else if (type === 'nylon') {
+      filterNode.frequency.setValueAtTime(2800, now);
+      filterNode.frequency.exponentialRampToValueAtTime(450, now + 0.16);
+    } else if (type === 'piano') {
+      filterNode.frequency.setValueAtTime(3200, now);
+      filterNode.frequency.exponentialRampToValueAtTime(1400, now + 0.22);
+    } else if (type === 'bass') {
+      filterNode.frequency.setValueAtTime(1200, now);
+      filterNode.frequency.exponentialRampToValueAtTime(180, now + 0.15);
+    }
+
+    // --- Pinch Harmonics Implementation ---
+    if (this.settings.pinchHarmonicsEnabled) {
+      // Calculate pinch harmonic frequency (+31 semitones: 2 octaves and a fifth higher for a soaring squeal)
+      const pinchNote = shiftedBaseNote + 31;
+      const pinchFreq = this.midiToFreq(pinchNote) * Math.pow(2, (this.settings.fineTune || 0) / 1200);
+
+      const oPinch = this.ctx.createOscillator();
+      oPinch.type = 'sawtooth';
+      oPinch.frequency.setValueAtTime(pinchFreq * 1.05, now); // Squealing pitch-bend entry
+      oPinch.frequency.exponentialRampToValueAtTime(pinchFreq, now + 0.08);
+
+      const pinchFilter = this.ctx.createBiquadFilter();
+      pinchFilter.type = 'bandpass';
+      pinchFilter.frequency.setValueAtTime(4000, now);
+      pinchFilter.frequency.exponentialRampToValueAtTime(1800, now + 0.15);
+      pinchFilter.Q.setValueAtTime(14.0, now); // Super-sharp resonant peak
+
+      const pinchGain = this.ctx.createGain();
+      const level = this.settings.pinchHarmonicsLevel !== undefined ? this.settings.pinchHarmonicsLevel : 0.5;
+      pinchGain.gain.setValueAtTime(level * 0.4, now);
+      pinchGain.gain.exponentialRampToValueAtTime(0.001, now + 0.2); // Squeals are highly transient
+
+      oPinch.connect(pinchFilter);
+      pinchFilter.connect(pinchGain);
+      pinchGain.connect(this.masterGain);
+
+      oPinch.start(now);
+      oscs.push({ node: oPinch, initialFreq: pinchFreq });
+    }
+
+    // Configure ADSR Envelope
+    const velocityScale = velocity / 127;
+    const peakGain = velocityScale * 0.25; // Scale down to avoid clipping
+
+    gainNode.gain.setValueAtTime(0, now);
+    
+    // Attack phase
+    gainNode.gain.linearRampToValueAtTime(peakGain, now + Math.max(0.005, this.settings.attack));
+    
+    // Decay and Sustain phases
+    gainNode.gain.setTargetAtTime(
+      peakGain * this.settings.sustain, 
+      now + Math.max(0.005, this.settings.attack), 
+      Math.max(0.005, this.settings.decay)
+    );
+
+    // Connection: Filter -> Envelope Gain -> Master Gain
+    filterNode.connect(gainNode);
+    gainNode.connect(this.masterGain);
+
+    // Save active voice
+    this.voices.set(note, {
+      oscs,
+      gainNode,
+      filterNode,
+      startTime: now,
+      modulators,
+      baseMidiNote: note
+    });
+  }
+
+  public noteOff(note: number) {
+    if (!this.ctx || !this.voices.has(note)) return;
+
+    const voice = this.voices.get(note)!;
+    this.voices.delete(note);
+
+    const now = this.ctx.currentTime;
+    const gainNode = voice.gainNode;
+    const oscs = voice.oscs;
+    const modulators = voice.modulators || [];
+
+    try {
+      // Cancel scheduled envelope events to prevent clicks
+      gainNode.gain.cancelScheduledValues(now);
+      gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+      
+      // Release phase
+      const releaseTime = Math.max(0.01, this.settings.release);
+      gainNode.gain.setTargetAtTime(0, now, releaseTime / 3);
+
+      // Stop all oscillators after release completes
+      oscs.forEach((osc) => {
+        try {
+          osc.node.stop(now + releaseTime * 1.5);
+        } catch (e) {}
+      });
+
+      // Stop any LFO modulators
+      modulators.forEach((mod) => {
+        if ('stop' in mod) {
+          try {
+            (mod as any).stop(now + releaseTime * 1.5);
+          } catch (e) {}
+        }
+      });
+    } catch (e) {
+      // Handle edge cases where audio node state is invalid
+      oscs.forEach((osc) => {
+        try {
+          osc.node.stop(now);
+        } catch (err) {}
+      });
+      modulators.forEach((mod) => {
+        if ('stop' in mod) {
+          try {
+            (mod as any).stop(now);
+          } catch (err) {}
+        }
       });
     }
+  }
 
-    // Instantiate oscillators for each component, applying Unison if configured
-    const unisonVoices = this.settings.unisonVoices || 1;
-    const unisonDetune = this.settings.unisonDetune || 0;
+  public updateVoicePitch(note: number, centsDeviation: number) {
+    if (!this.ctx || !this.voices.has(note)) return;
+    const voice = this.voices.get(note)!;
+    const now = this.ctx.currentTime;
+    
+    // Scale factor for cents deviation
+    const bendMultiplier = Math.pow(2, centsDeviation / 1200);
 
-    components.forEach((comp) => {
-      const baseFreq = frequency * comp.frequencyRatio;
+    voice.oscs.forEach((vOsc) => {
+      const targetFreq = vOsc.initialFreq * bendMultiplier;
+      // Use setTargetAtTime for smooth, click-free pitch updates
+      vOsc.node.frequency.setTargetAtTime(targetFreq, now, 0.015);
+    });
+  }
 
-      for (let i = 0; i < unisonVoices; i++) {
-        const osc = this.ctx!.createOscillator();
-        osc.type = comp.type;
-        osc.frequency.setValueAtTime(baseFreq, now);
+  public glideVoice(oldNote: number, newNote: number, glideTime: number) {
+    if (!this.ctx || !this.voices.has(oldNote)) return;
+    const voice = this.voices.get(oldNote)!;
+    const now = this.ctx.currentTime;
 
-        // Calculate detune centering for Unison
-        let unisonDetuneCents = 0;
-        if (unisonVoices > 1) {
-          const fraction = (i / (unisonVoices - 1)) - 0.5; // range -0.5 to 0.5
-          unisonDetuneCents = fraction * 2 * unisonDetune;
-        }
+    const oldFreq = this.midiToFreq(oldNote);
+    const newFreq = this.midiToFreq(newNote);
+    const ratio = newFreq / oldFreq;
 
-        const totalDetune = comp.detuneOffset + unisonDetuneCents;
-        osc.detune.setValueAtTime(totalDetune, now);
+    // Glide time cannot be 0, minimum 0.01s for smoothness
+    const time = Math.max(0.01, glideTime);
 
-        // Individual component volume/decay configurations
-        if (comp.isHammer) {
-          // Hammer strike transient: fast exponential decay
-          const hammerGain = this.ctx!.createGain();
-          hammerGain.gain.setValueAtTime(comp.gainRatio, now);
-          hammerGain.gain.setTargetAtTime(0, now, 0.03); // ~30ms decay constant
-          osc.connect(hammerGain);
-          hammerGain.connect(voiceGain);
-        } else if (comp.gainRatio !== 1.0) {
-          const compGain = this.ctx!.createGain();
-          compGain.gain.setValueAtTime(comp.gainRatio, now);
-          
-          if (this.settings.waveType === 'piano' && comp.frequencyRatio > 1) {
-            // Decay higher piano harmonics faster for authentic string modeling
-            const harmonicDecayFactor = this.settings.decay * (1.2 / comp.frequencyRatio);
-            compGain.gain.setTargetAtTime(0, now, Math.max(0.01, harmonicDecayFactor));
+    voice.oscs.forEach((vOsc) => {
+      // Scale initial frequency based on ratio
+      const targetFreq = vOsc.initialFreq * ratio;
+      // Record new initialFreq so that subsequent pitch bends are correctly referenced!
+      vOsc.initialFreq = targetFreq;
+
+      vOsc.node.frequency.cancelScheduledValues(now);
+      vOsc.node.frequency.setValueAtTime(vOsc.node.frequency.value, now);
+      vOsc.node.frequency.exponentialRampToValueAtTime(targetFreq, now + time);
+    });
+
+    // Update base midi note
+    voice.baseMidiNote = newNote;
+  }
+
+  public hasVoice(note: number): boolean {
+    return this.voices.has(note);
+  }
+
+  public renameVoice(oldNote: number, newNote: number) {
+    if (this.voices.has(oldNote)) {
+      const voice = this.voices.get(oldNote)!;
+      this.voices.delete(oldNote);
+      
+      // Stop and clean up any pre-existing voice at the target note to prevent voice leaks
+      if (this.voices.has(newNote)) {
+        this.noteOff(newNote);
+      }
+      
+      this.voices.set(newNote, voice);
+    }
+  }
+
+  public panic() {
+    if (!this.ctx) return;
+    
+    // Stop all active voices
+    this.voices.forEach((voice) => {
+      voice.oscs.forEach((osc) => {
+        try {
+          osc.node.stop();
+        } catch (e) {}
+      });
+      if (voice.modulators) {
+        voice.modulators.forEach((mod) => {
+          if ('stop' in mod) {
+            try {
+              (mod as any).stop();
+            } catch (e) {}
           }
-          osc.connect(compGain);
-          compGain.connect(voiceGain);
-        } else {
-          osc.connect(voiceGain);
-        }
-
-        osc.start(now);
-        oscs.push({
-          node: osc,
-          frequencyRatio: comp.frequencyRatio
         });
       }
     });
-
-    // Connect voice gain to filter, filter to master FX chain
-    voiceGain.connect(filter);
-    filter.connect(this.distortionNode);
-    
-    // Also send a portion to the delay line
-    voiceGain.connect(this.delayNode);
-
-    // Store active voice
-    this.activeVoices.set(shiftedMidiNote, {
-      oscs,
-      gainNode: voiceGain,
-      filterNode: filter,
-      startTime: now,
-      midiNote: shiftedMidiNote
-    });
+    this.voices.clear();
   }
 
-  public pitchBend(midiNote: number, centsOffset: number) {
-    if (!this.ctx) return;
-    const shiftedMidiNote = midiNote + (this.settings.octaveOffset * 12);
-    const voice = this.activeVoices.get(shiftedMidiNote);
-    if (!voice) return;
-
-    const now = this.ctx.currentTime;
-    const targetMidi = shiftedMidiNote + (centsOffset / 100);
-    const frequency = 440 * Math.pow(2, (targetMidi - 69) / 12);
-    
-    voice.oscs.forEach((oscObj) => {
-      const targetFreq = frequency * oscObj.frequencyRatio;
-      oscObj.node.frequency.setTargetAtTime(targetFreq, now, 0.05);
-    });
-  }
-
-  public noteOff(midiNote: number) {
-    if (!this.ctx) return;
-    
-    const shiftedMidiNote = midiNote + (this.settings.octaveOffset * 12);
-    const voice = this.activeVoices.get(shiftedMidiNote);
-    if (!voice) return;
-
-    const now = this.ctx.currentTime;
-    const gainParam = voice.gainNode.gain;
-
-    // Clear scheduled envelope events to prevent clicks
-    gainParam.cancelScheduledValues(now);
-    gainParam.setValueAtTime(gainParam.value, now);
-
-    // Release phase: exponential ramp down to 0
-    const releaseTime = Math.max(0.005, this.settings.release);
-    gainParam.setTargetAtTime(0, now, releaseTime / 3);
-
-    const voiceMidi = shiftedMidiNote;
-    
-    // Stop the oscillators after release finishes
-    setTimeout(() => {
-      try {
-        voice.oscs.forEach((oscObj) => {
-          oscObj.node.stop();
-          oscObj.node.disconnect();
-        });
-        voice.gainNode.disconnect();
-        voice.filterNode.disconnect();
-      } catch (e) {
-        // Guard against any contextual node lifecycle issues
-      }
-    }, releaseTime * 1000 + 100);
-
-    this.activeVoices.delete(voiceMidi);
-  }
-
-  public allNotesOff() {
-    this.activeVoices.forEach((voice) => {
-      try {
-        voice.oscs.forEach((oscObj) => {
-          oscObj.node.stop();
-          oscObj.node.disconnect();
-        });
-        voice.gainNode.disconnect();
-        voice.filterNode.disconnect();
-      } catch (e) {}
-    });
-    this.activeVoices.clear();
+  public resumeContext() {
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
   }
 }

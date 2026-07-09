@@ -1,136 +1,146 @@
-import React from 'react';
-import { PitchData, Tuning } from '../types';
-import { Play, Volume2 } from 'lucide-react';
+import { PitchData } from '../types';
+import { motion } from 'framer-motion';
+import { Volume2 } from 'lucide-react';
 
 interface TunerDialProps {
   pitchData: PitchData | null;
-  listening: boolean;
-  tuning: Tuning;
-  onPlayReferenceNote: (noteName: string, midiNote: number) => void;
+  onPlayReference: (note: number) => void;
 }
 
-export const TunerDial: React.FC<TunerDialProps> = ({
-  pitchData,
-  listening,
-  tuning,
-  onPlayReferenceNote,
-}) => {
-  const cents = pitchData?.centsOffset ?? 0;
-  const noteName = pitchData?.noteName ?? '--';
-  const frequency = pitchData?.frequency ?? 0;
-  
-  // Calculate angle for the needle (-50 to +50 cents maps to -60deg to +60deg)
-  const clampedCents = Math.max(-50, Math.min(50, cents));
-  const needleAngle = (clampedCents / 50) * 60;
+const GUITAR_STRINGS = [
+  { note: 64, name: 'E4', desc: '1st (High E)' },
+  { note: 59, name: 'B3', desc: '2nd' },
+  { note: 55, name: 'G3', desc: '3rd' },
+  { note: 50, name: 'D3', desc: '4th' },
+  { note: 45, name: 'A2', desc: '5th' },
+  { note: 40, name: 'E2', desc: '6th (Low E)' },
+];
 
-  // Determine tune status
-  let tuneStatusColor = 'text-zinc-500';
-  let statusText = 'No Signal';
+export function TunerDial({ pitchData, onPlayReference }: TunerDialProps) {
+  // Map cents deviation (-50 to +50) to angle (-60 to +60 degrees)
+  const cents = pitchData ? pitchData.centsDeviation : 0;
+  const isPitchActive = !!pitchData && pitchData.clarity > 0.9;
+  const targetAngle = isPitchActive ? Math.max(-50, Math.min(50, cents)) * 1.5 : 0;
   
-  if (listening) {
-    if (!pitchData || pitchData.midiNote === -1) {
-      statusText = 'Listening...';
-      tuneStatusColor = 'text-zinc-400 animate-pulse';
-    } else if (Math.abs(cents) <= 3) {
-      statusText = 'In Tune';
-      tuneStatusColor = 'text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.3)]';
+  // Color determination based on accuracy
+  let statusColor = 'text-gray-400';
+  let indicatorBg = 'bg-gray-800 border-gray-700';
+  let glowColor = '';
+  
+  if (isPitchActive) {
+    if (Math.abs(cents) < 2) {
+      statusColor = 'text-green-400';
+      indicatorBg = 'bg-green-500/20 border-green-500/50';
+      glowColor = 'shadow-[0_0_20px_rgba(34,197,94,0.3)]';
     } else if (cents < 0) {
-      statusText = 'Flat';
-      tuneStatusColor = 'text-amber-500';
+      statusColor = 'text-cyan-400';
+      indicatorBg = 'bg-cyan-500/10 border-cyan-500/30';
     } else {
-      statusText = 'Sharp';
-      tuneStatusColor = 'text-cyan-500';
+      statusColor = 'text-rose-400';
+      indicatorBg = 'bg-rose-500/10 border-rose-500/30';
     }
   }
 
   return (
-    <div className="flex flex-col items-center bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-xl w-full">
-      {/* Header */}
-      <div className="w-full flex justify-between items-center mb-6">
-        <h3 className="font-display font-medium text-lg text-zinc-200">String Tuner & Pitch Meter</h3>
-        <span className={`text-xs px-2.5 py-1 rounded-full font-mono bg-zinc-950 border border-zinc-800 ${tuneStatusColor}`}>
-          ● {statusText}
-        </span>
+    <div id="tuner-dial-card" className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 shadow-xl flex flex-col h-full justify-between">
+      <div>
+        <h2 className="text-sm font-semibold tracking-wider text-neutral-400 uppercase mb-4 flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+          Precision Guitar Tuner
+        </h2>
+        
+        {/* Semi-circular visual dial */}
+        <div className="relative h-32 flex items-end justify-center mb-6 overflow-hidden">
+          {/* Dial Arc Background */}
+          <div className="absolute w-56 h-56 border-t-2 border-l border-r border-neutral-800 rounded-full -bottom-24 flex items-center justify-center">
+            {/* Fine graduation ticks */}
+            {[-30, -15, 0, 15, 30].map((tick) => {
+              const rot = tick * 1.5;
+              return (
+                <div
+                  key={tick}
+                  className="absolute w-[1px] h-3 bg-neutral-700 origin-bottom"
+                  style={{
+                    transform: `rotate(${rot}deg) translateY(-106px)`,
+                  }}
+                />
+              );
+            })}
+          </div>
+
+          {/* Reference markings */}
+          <div className="absolute bottom-1 left-2 text-[10px] font-mono text-neutral-600">-50 cents</div>
+          <div className="absolute bottom-1 right-2 text-[10px] font-mono text-neutral-600">+50 cents</div>
+          <div className="absolute -top-1 left-1/2 -translate-x-1/2 text-[10px] font-mono text-neutral-500">IN TUNE</div>
+
+          {/* Needle */}
+          <motion.div
+            id="tuner-needle"
+            className="absolute bottom-0 w-1 h-24 bg-gradient-to-t origin-bottom rounded-full"
+            style={{
+              backgroundImage: isPitchActive
+                ? Math.abs(cents) < 2
+                  ? 'linear-gradient(to top, rgba(34,197,94,0.1), #22c55e)'
+                  : cents < 0
+                    ? 'linear-gradient(to top, rgba(6,182,212,0.1), #06b6d4)'
+                    : 'linear-gradient(to top, rgba(244,63,94,0.1), #f43f5e)'
+                : 'linear-gradient(to top, rgba(115,115,115,0.1), #737373)',
+            }}
+            animate={{ rotate: targetAngle }}
+            transition={{ type: 'spring', stiffness: 120, damping: 15 }}
+          />
+
+          {/* Pivot Center Point */}
+          <div className="absolute -bottom-2 w-4 h-4 bg-neutral-800 border border-neutral-700 rounded-full z-10" />
+        </div>
+
+        {/* Readouts */}
+        <div className="text-center mb-6">
+          <div className="min-h-16 flex flex-col justify-center items-center">
+            {isPitchActive ? (
+              <div className="flex flex-col items-center">
+                <span className={`text-4xl font-extrabold font-mono tracking-tight ${statusColor}`}>
+                  {pitchData.noteName}
+                </span>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs font-mono text-neutral-400">
+                    {pitchData.frequency.toFixed(1)} Hz
+                  </span>
+                  <span className={`text-xs font-mono px-2 py-0.5 rounded ${indicatorBg} ${glowColor}`}>
+                    {cents > 0 ? `+${cents.toFixed(0)}` : cents.toFixed(0)} cents
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center">
+                <span className="text-xl font-medium text-neutral-500">Awaiting Signal...</span>
+                <span className="text-xs text-neutral-600 mt-1 max-w-[220px]">
+                  Pluck your guitar string or tap a reference note
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
-      {/* Tuner Gauge Display */}
-      <div className="relative w-64 h-48 flex items-center justify-center mt-2">
-        {/* Background Semi-circle arch */}
-        <div className="absolute top-0 w-full h-full border-t border-l border-r border-zinc-800 rounded-t-full flex items-end justify-center overflow-hidden">
-          {/* Tick marks */}
-          <div className="absolute inset-0 flex justify-between items-end px-4 pb-2 text-[10px] font-mono text-zinc-600">
-            <span>-50¢</span>
-            <span>-25¢</span>
-            <span className="text-zinc-500">0</span>
-            <span>+25¢</span>
-            <span>+50¢</span>
-          </div>
-
-          {/* Color blocks */}
-          <div className="absolute top-2 w-48 h-24 border-t-2 border-dashed border-zinc-800 rounded-t-full opacity-40"></div>
-          
-          {/* Center alignment guide */}
-          <div className="absolute top-0 left-1/2 -ml-[1px] w-[2px] h-4 bg-emerald-500 opacity-60"></div>
-        </div>
-
-        {/* Needle Gauge */}
-        <div 
-          className="absolute bottom-0 w-1 h-32 bg-indigo-500 origin-bottom rounded-full transition-transform duration-100 ease-out shadow-lg"
-          style={{ 
-            transform: `rotate(${needleAngle}deg)`,
-            left: 'calc(50% - 2px)'
-          }}
-        >
-          {/* Needle tip glow */}
-          <div className={`absolute top-0 -left-1 w-3 h-3 rounded-full ${Math.abs(cents) <= 3 ? 'bg-emerald-400 shadow-[0_0_8px_#10b981]' : 'bg-indigo-400 shadow-[0_0_8px_#6366f1]'}`}></div>
-        </div>
-
-        {/* Central Dial Hub */}
-        <div className="absolute bottom-0 w-36 h-18 bg-zinc-950 border border-zinc-800 rounded-t-full flex flex-col justify-end items-center pb-2 z-10 shadow-inner">
-          {/* Detected note name */}
-          <div className="font-display font-bold text-4xl text-zinc-100 leading-none">
-            {noteName}
-          </div>
-          {/* Detected frequency */}
-          <div className="font-mono text-xs text-zinc-500 mt-1">
-            {frequency > 0 ? `${frequency.toFixed(1)} Hz` : '0.0 Hz'}
-          </div>
-          {/* Cents deviation */}
-          <div className={`font-mono text-[10px] mt-1 ${Math.abs(cents) <= 3 ? 'text-emerald-400' : cents < 0 ? 'text-amber-500' : 'text-cyan-400'}`}>
-            {frequency > 0 ? (cents > 0 ? `+${cents}¢` : `${cents}¢`) : '--'}
-          </div>
-        </div>
-      </div>
-
-      {/* Reference Tuner Strings */}
-      <div className="w-full mt-6">
-        <div className="text-xs font-mono text-zinc-500 mb-2.5 text-center">Reference pitches (Tap to play reference tone)</div>
-        <div className="grid grid-cols-6 gap-2">
-          {tuning.notes.map((note, index) => {
-            const stringName = ['E4', 'B3', 'G3', 'D3', 'A2', 'E2'][index] || note;
-            const stringMidi = tuning.midiNumbers[index];
-            const isClosest = pitchData && pitchData.midiNote !== -1 && Math.abs(pitchData.midiNote - stringMidi) <= 2;
-            
-            return (
-              <button
-                key={index}
-                onClick={() => onPlayReferenceNote(note, stringMidi)}
-                className={`flex flex-col items-center justify-center py-2.5 rounded-xl border font-mono transition-all duration-200 cursor-pointer ${
-                  isClosest 
-                    ? 'bg-indigo-950/40 border-indigo-500/60 text-indigo-200 shadow-[0_0_8px_rgba(99,102,241,0.2)]'
-                    : 'bg-zinc-950/60 border-zinc-800/80 text-zinc-400 hover:bg-zinc-800/50 hover:border-zinc-700 hover:text-zinc-200'
-                }`}
-                id={`ref-string-${index}`}
-                title={`Play string ${stringName}`}
-              >
-                <span className="text-xs font-semibold text-zinc-500">{6 - index}</span>
-                <span className="text-sm font-bold mt-0.5">{stringName.replace(/\d/, '')}</span>
-                <Volume2 className="w-3.5 h-3.5 mt-1.5 opacity-60 hover:opacity-100 text-indigo-400" />
-              </button>
-            );
-          })}
+      {/* Reference Tuner helper */}
+      <div className="border-t border-neutral-800 pt-4">
+        <h3 className="text-xs font-semibold text-neutral-400 mb-2">Guitar Reference Notes</h3>
+        <div className="grid grid-cols-6 gap-1">
+          {GUITAR_STRINGS.map((str) => (
+            <button
+              id={`ref-note-btn-${str.name}`}
+              key={str.name}
+              onClick={() => onPlayReference(str.note)}
+              className="flex flex-col items-center justify-center py-2 px-1 rounded-lg border border-neutral-800 bg-neutral-950 hover:bg-neutral-800 hover:border-neutral-700 text-neutral-300 hover:text-white transition group"
+              title={`Play Reference Note ${str.name} (${str.desc})`}
+            >
+              <span className="text-xs font-mono font-bold">{str.name}</span>
+              <Volume2 className="w-3.5 h-3.5 text-neutral-600 group-hover:text-green-400 mt-1 transition-colors" />
+            </button>
+          ))}
         </div>
       </div>
     </div>
   );
-};
+}

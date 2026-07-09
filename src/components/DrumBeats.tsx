@@ -1,345 +1,328 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Play, Square, Plus, Minus, Music } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Play, Square, Music, Activity } from 'lucide-react';
 
 interface DrumBeatsProps {
-  audioContext: AudioContext | null;
+  onPlayStatusChange?: (isPlaying: boolean) => void;
 }
 
-export const DrumBeats: React.FC<DrumBeatsProps> = ({ audioContext }) => {
-  const [bpm, setBpm] = useState<number>(100);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [activeBeat, setActiveBeat] = useState<number>(-1); // 0, 1, 2, 3
-  const [beatPattern, setBeatPattern] = useState<'metronome' | 'rock' | 'dance'>('metronome');
+const STEPS = 8;
 
-  const timerRef = useRef<number | null>(null);
+// Define pre-programmed drum loops (Rows: Kick, Snare, Hihat; Cols: 8 steps)
+const PATTERNS: Record<string, { kick: boolean[]; snare: boolean[]; hihat: boolean[] }> = {
+  'Rock/Pop': {
+    kick:  [true,  false, false, false, true,  false, false, false],
+    snare: [false, false, true,  false, false, false, true,  false],
+    hihat: [true,  true,  true,  true,  true,  true,  true,  true],
+  },
+  'Funk': {
+    kick:  [true,  false, false, true,  false, false, true,  false],
+    snare: [false, false, true,  false, false, true,  true,  false],
+    hihat: [true,  true,  true,  true,  true,  true,  true,  true],
+  },
+  'Metronome': {
+    kick:  [true,  false, true,  false, true,  false, true,  false],
+    snare: [false, false, false, false, false, false, false, false],
+    hihat: [true,  true,  true,  true,  true,  true,  true,  true],
+  },
+  'Practice Click': {
+    kick:  [true,  false, false, false, false, false, false, false],
+    snare: [false, false, false, false, false, false, false, false],
+    hihat: [true,  false, true,  false, true,  false, true,  false],
+  }
+};
+
+export function DrumBeats({ onPlayStatusChange }: DrumBeatsProps) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [bpm, setBpm] = useState(110);
+  const [activePattern, setActivePattern] = useState('Rock/Pop');
+  const [currentStep, setCurrentStep] = useState(0);
+
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const schedulerTimerRef = useRef<number | null>(null);
   const nextNoteTimeRef = useRef<number>(0);
-  const currentBeatRef = useRef<number>(0);
-  
-  // Clean up timer on unmount
+  const stepRef = useRef<number>(0);
+
+  const bpmRef = useRef(bpm);
+  useEffect(() => {
+    bpmRef.current = bpm;
+  }, [bpm]);
+
+  const activePatternRef = useRef(activePattern);
+  useEffect(() => {
+    activePatternRef.current = activePattern;
+  }, [activePattern]);
+
+  // Audio synthesis helper for synthesized drum sounds
+  const playKick = (ctx: AudioContext, time: number) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.frequency.setValueAtTime(120, time);
+    osc.frequency.exponentialRampToValueAtTime(0.01, time + 0.15);
+
+    gain.gain.setValueAtTime(0.8, time);
+    gain.gain.exponentialRampToValueAtTime(0.01, time + 0.15);
+
+    osc.start(time);
+    osc.stop(time + 0.15);
+  };
+
+  const playHiHat = (ctx: AudioContext, time: number) => {
+    // White noise generator
+    const bufferSize = ctx.sampleRate * 0.04; // 40ms of noise
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
+
+    const noiseNode = ctx.createBufferSource();
+    noiseNode.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.setValueAtTime(8000, time);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.2, time);
+    gain.gain.exponentialRampToValueAtTime(0.01, time + 0.04);
+
+    noiseNode.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+
+    noiseNode.start(time);
+    noiseNode.stop(time + 0.04);
+  };
+
+  const playSnare = (ctx: AudioContext, time: number) => {
+    // Combination of white noise (filtered) and triangle thump
+    const bufferSize = ctx.sampleRate * 0.12;
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
+
+    const noiseNode = ctx.createBufferSource();
+    noiseNode.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(1000, time);
+
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.3, time);
+    noiseGain.gain.exponentialRampToValueAtTime(0.01, time + 0.12);
+
+    noiseNode.connect(filter);
+    filter.connect(noiseGain);
+    noiseGain.connect(ctx.destination);
+
+    // Body of the snare
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(180, time);
+
+    const oscGain = ctx.createGain();
+    oscGain.gain.setValueAtTime(0.4, time);
+    oscGain.gain.exponentialRampToValueAtTime(0.01, time + 0.08);
+
+    osc.connect(oscGain);
+    oscGain.connect(ctx.destination);
+
+    noiseNode.start(time);
+    noiseNode.stop(time + 0.12);
+
+    osc.start(time);
+    osc.stop(time + 0.08);
+  };
+
+  // Clock Scheduler Loop
+  const scheduleNextNote = () => {
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
+
+    // Beats per minute converted to steps per second (Assuming eighth notes)
+    const secondsPerStep = 60 / bpmRef.current / 2;
+
+    while (nextNoteTimeRef.current < ctx.currentTime + 0.1) {
+      const playTime = nextNoteTimeRef.current;
+      const stepIndex = stepRef.current;
+
+      const pattern = PATTERNS[activePatternRef.current] || PATTERNS['Rock/Pop'];
+
+      // Play hits if programmed
+      if (pattern.kick[stepIndex]) playKick(ctx, playTime);
+      if (pattern.snare[stepIndex]) playSnare(ctx, playTime);
+      if (pattern.hihat[stepIndex]) playHiHat(ctx, playTime);
+
+      // Advance step state visually using callback
+      const targetStep = stepIndex;
+      setTimeout(() => {
+        setCurrentStep(targetStep);
+      }, (playTime - ctx.currentTime) * 1000);
+
+      // Advance scheduler states
+      nextNoteTimeRef.current += secondsPerStep;
+      stepRef.current = (stepRef.current + 1) % STEPS;
+    }
+
+    // Call scheduler again in 25ms
+    schedulerTimerRef.current = window.setTimeout(scheduleNextNote, 25);
+  };
+
+  const handleTogglePlay = () => {
+    if (isPlaying) {
+      // Stop
+      if (schedulerTimerRef.current) {
+        clearTimeout(schedulerTimerRef.current);
+        schedulerTimerRef.current = null;
+      }
+      setIsPlaying(false);
+      onPlayStatusChange?.(false);
+    } else {
+      // Initialize Audio context safely
+      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new AudioCtxClass();
+      } else if (audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume();
+      }
+
+      const ctx = audioCtxRef.current;
+      setIsPlaying(true);
+      onPlayStatusChange?.(true);
+
+      // Start clock scheduler
+      nextNoteTimeRef.current = ctx.currentTime + 0.05;
+      stepRef.current = 0;
+      setCurrentStep(0);
+      scheduleNextNote();
+    }
+  };
+
   useEffect(() => {
     return () => {
-      if (timerRef.current) {
-        window.clearInterval(timerRef.current);
+      if (schedulerTimerRef.current) {
+        clearTimeout(schedulerTimerRef.current);
       }
     };
   }, []);
 
-  // Handle play toggle
-  const togglePlay = () => {
-    if (!audioContext) return;
-    
-    // Resume context if suspended
-    if (audioContext.state === 'suspended') {
-      audioContext.resume();
-    }
-
-    if (isPlaying) {
-      stopScheduler();
-    } else {
-      startScheduler();
-    }
-  };
-
-  const startScheduler = () => {
-    if (!audioContext) return;
-    setIsPlaying(true);
-    currentBeatRef.current = 0;
-    nextNoteTimeRef.current = audioContext.currentTime + 0.05;
-
-    // Run scheduling ticks every 25ms
-    timerRef.current = window.setInterval(() => {
-      scheduler();
-    }, 25);
-  };
-
-  const stopScheduler = () => {
-    setIsPlaying(false);
-    setActiveBeat(-1);
-    if (timerRef.current) {
-      window.clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-  };
-
-  const scheduler = () => {
-    if (!audioContext) return;
-    
-    // Schedule beat events slightly ahead of time to prevent audio glitches
-    while (nextNoteTimeRef.current < audioContext.currentTime + 0.1) {
-      const time = nextNoteTimeRef.current;
-      const beat = currentBeatRef.current;
-
-      scheduleAudioBeat(beat, time);
-      
-      // Update visual indicator in sync with the audio
-      const delay = (time - audioContext.currentTime) * 1000;
-      setTimeout(() => {
-        if (isPlaying) {
-          setActiveBeat(beat);
-        }
-      }, Math.max(0, delay));
-
-      // Calculate next note time based on BPM (quarter notes)
-      const secondsPerBeat = 60.0 / bpm;
-      nextNoteTimeRef.current += secondsPerBeat;
-      currentBeatRef.current = (beat + 1) % 4;
-    }
-  };
-
-  // Synthesis helpers for drum sounds
-  const playKick = (time: number) => {
-    if (!audioContext) return;
-    const osc = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-    
-    osc.connect(gain);
-    gain.connect(audioContext.destination);
-    
-    // Pitch envelope: drops rapidly from 150Hz to 40Hz
-    osc.frequency.setValueAtTime(150, time);
-    osc.frequency.exponentialRampToValueAtTime(40, time + 0.12);
-    
-    // Volume envelope: decays exponentially
-    gain.gain.setValueAtTime(1.0, time);
-    gain.gain.exponentialRampToValueAtTime(0.01, time + 0.2);
-    
-    osc.start(time);
-    osc.stop(time + 0.22);
-  };
-
-  const playSnare = (time: number) => {
-    if (!audioContext) return;
-    
-    // Create snare noise buffer
-    const bufferSize = audioContext.sampleRate * 0.15; // 0.15 seconds
-    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-    const data = buffer.getChannelData(0);
-    
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = Math.random() * 2 - 1;
-    }
-    
-    const noiseNode = audioContext.createBufferSource();
-    noiseNode.buffer = buffer;
-    
-    // Highpass filter for snare crispness
-    const filter = audioContext.createBiquadFilter();
-    filter.type = 'highpass';
-    filter.frequency.setValueAtTime(1000, time);
-    
-    const gain = audioContext.createGain();
-    
-    // Noise routing
-    noiseNode.connect(filter);
-    filter.connect(gain);
-    gain.connect(audioContext.destination);
-    
-    // Snare tone (short body oscillator at 180Hz)
-    const toneOsc = audioContext.createOscillator();
-    const toneGain = audioContext.createGain();
-    toneOsc.frequency.setValueAtTime(180, time);
-    toneOsc.connect(toneGain);
-    toneGain.connect(audioContext.destination);
-    
-    // Envelopes
-    gain.gain.setValueAtTime(0.6, time);
-    gain.gain.exponentialRampToValueAtTime(0.01, time + 0.12);
-    
-    toneGain.gain.setValueAtTime(0.4, time);
-    toneGain.gain.exponentialRampToValueAtTime(0.01, time + 0.08);
-    
-    noiseNode.start(time);
-    noiseNode.stop(time + 0.15);
-    
-    toneOsc.start(time);
-    toneOsc.stop(time + 0.1);
-  };
-
-  const playHiHat = (time: number) => {
-    if (!audioContext) return;
-    
-    const bufferSize = audioContext.sampleRate * 0.04; // Very short
-    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = Math.random() * 2 - 1;
-    }
-    
-    const noise = audioContext.createBufferSource();
-    noise.buffer = buffer;
-    
-    const filter = audioContext.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(8000, time);
-    filter.Q.setValueAtTime(10, time);
-    
-    const gain = audioContext.createGain();
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(audioContext.destination);
-    
-    gain.gain.setValueAtTime(0.2, time);
-    gain.gain.exponentialRampToValueAtTime(0.005, time + 0.035);
-    
-    noise.start(time);
-    noise.stop(time + 0.04);
-  };
-
-  const playTick = (time: number, isDownbeat: boolean) => {
-    if (!audioContext) return;
-    
-    const osc = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-    
-    osc.connect(gain);
-    gain.connect(audioContext.destination);
-    
-    // Metronome click: High pitch woodblock style
-    osc.frequency.setValueAtTime(isDownbeat ? 1000 : 600, time);
-    
-    gain.gain.setValueAtTime(0.3, time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
-    
-    osc.start(time);
-    osc.stop(time + 0.06);
-  };
-
-  const scheduleAudioBeat = (beat: number, time: number) => {
-    if (beatPattern === 'metronome') {
-      // Beat 0 is accent downbeat, others are ticks
-      playTick(time, beat === 0);
-    } else if (beatPattern === 'rock') {
-      // Standard rock beat:
-      // Beat 0: Kick + HiHat
-      // Beat 1: HiHat
-      // Beat 2: Snare + HiHat
-      // Beat 3: HiHat
-      if (beat === 0) {
-        playKick(time);
-        playHiHat(time);
-      } else if (beat === 1) {
-        playHiHat(time);
-      } else if (beat === 2) {
-        playSnare(time);
-        playHiHat(time);
-      } else if (beat === 3) {
-        playHiHat(time);
-      }
-    } else if (beatPattern === 'dance') {
-      // Four-on-the-floor dance beat:
-      // Kick on every beat
-      // Snare on beat 2
-      // Off-beat HiHat (we can schedule hat slightly shifted or simplified)
-      playKick(time);
-      playHiHat(time);
-      if (beat === 2) {
-        playSnare(time);
-      }
-    }
-  };
-
-  const adjustBpm = (amount: number) => {
-    setBpm((prev) => Math.max(40, Math.min(240, prev + amount)));
-  };
-
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-xl w-full">
-      <div className="flex justify-between items-center mb-6">
-        <h3 className="font-display font-medium text-lg text-zinc-200 flex items-center gap-2">
-          <Music className="w-5 h-5 text-indigo-400" /> Rhythm & Practice Loop
-        </h3>
-        
-        {/* Pattern Selectors */}
-        <div className="flex gap-1.5 bg-zinc-950 p-1 rounded-xl border border-zinc-850">
-          {(['metronome', 'rock', 'dance'] as const).map((pattern) => (
-            <button
-              key={pattern}
-              onClick={() => setBeatPattern(pattern)}
-              className={`text-[10px] px-2.5 py-1 rounded-lg border border-transparent font-mono transition cursor-pointer capitalize ${
-                beatPattern === pattern
-                  ? 'bg-zinc-800 text-indigo-300'
-                  : 'text-zinc-500 hover:text-zinc-300'
-              }`}
-            >
-              {pattern}
-            </button>
-          ))}
-        </div>
-      </div>
+    <div id="drum-beats-card" className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 shadow-xl flex flex-col justify-between h-full">
+      <div>
+        <h2 className="text-sm font-semibold tracking-wider text-neutral-400 uppercase flex items-center gap-2 mb-4">
+          <Music className="w-4 h-4 text-rose-400" />
+          Rhythm Companion & Loop Practice
+        </h2>
 
-      <div className="flex flex-col md:flex-row items-center gap-6">
-        {/* Playback Controls */}
-        <div className="flex items-center gap-4 w-full md:w-auto shrink-0">
-          <button
-            onClick={togglePlay}
-            className={`w-14 h-14 rounded-full flex items-center justify-center border cursor-pointer transition-all duration-200 ${
-              isPlaying
-                ? 'bg-rose-600 hover:bg-rose-500 border-rose-500 shadow-[0_0_12px_rgba(239,68,68,0.3)] text-white'
-                : 'bg-indigo-600 hover:bg-indigo-500 border-indigo-500 shadow-[0_0_12px_rgba(99,102,241,0.3)] text-white'
-            }`}
-            id="rhythm-play-btn"
-            title={isPlaying ? 'Stop metronome' : 'Start metronome'}
-          >
-            {isPlaying ? <Square className="w-6 h-6 fill-white" /> : <Play className="w-6 h-6 fill-white ml-0.5" />}
-          </button>
-
-          {/* BPM display & modifiers */}
-          <div className="flex flex-col">
-            <span className="text-[10px] font-mono text-zinc-500">Practice Speed</span>
-            <div className="flex items-center gap-2 mt-0.5">
+        {/* Style selection */}
+        <div className="mb-4">
+          <label className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider block mb-1.5">
+            Rhythm Preset Style
+          </label>
+          <div className="grid grid-cols-2 gap-1.5">
+            {Object.keys(PATTERNS).map((style) => (
               <button
-                onClick={() => adjustBpm(-5)}
-                className="p-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-400 hover:text-zinc-200 cursor-pointer"
-                id="bpm-decrease"
-              >
-                <Minus className="w-3.5 h-3.5" />
-              </button>
-              <span className="font-display font-bold text-2xl text-zinc-100 w-14 text-center font-mono select-none">
-                {bpm}
-              </span>
-              <button
-                onClick={() => adjustBpm(5)}
-                className="p-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-400 hover:text-zinc-200 cursor-pointer"
-                id="bpm-increase"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-              <span className="text-xs font-mono text-zinc-500">BPM</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Beats Slider and Visual Indicator */}
-        <div className="flex-1 w-full flex flex-col gap-3">
-          {/* Slider */}
-          <input
-            type="range"
-            min="40"
-            max="220"
-            value={bpm}
-            onChange={(e) => setBpm(parseInt(e.target.value))}
-            className="w-full accent-indigo-500 cursor-pointer"
-          />
-
-          {/* Beat visual display dots */}
-          <div className="grid grid-cols-4 gap-2">
-            {[0, 1, 2, 3].map((beatIdx) => (
-              <div
-                key={beatIdx}
-                className={`h-4 rounded-xl border transition-all duration-100 flex items-center justify-center font-mono text-[9px] ${
-                  activeBeat === beatIdx
-                    ? 'bg-indigo-500 border-indigo-400 shadow-[0_0_12px_rgba(99,102,241,0.4)] text-white scale-102 font-bold'
-                    : isPlaying
-                      ? 'bg-zinc-950 border-zinc-850 text-zinc-700'
-                      : 'bg-zinc-950/40 border-zinc-900 text-zinc-800'
+                id={`drum-style-${style.replace(/\s+/g, '-').toLowerCase()}`}
+                key={style}
+                onClick={() => setActivePattern(style)}
+                className={`py-2 px-3 rounded-lg border text-xs font-semibold text-center transition ${
+                  activePattern === style
+                    ? 'bg-rose-500/10 border-rose-500/50 text-rose-400'
+                    : 'bg-neutral-950 border-neutral-850 hover:bg-neutral-800 text-neutral-400'
                 }`}
               >
-                {beatIdx === 0 ? 'Down' : beatIdx + 1}
-              </div>
+                {style}
+              </button>
             ))}
           </div>
         </div>
+
+        {/* BPM selection */}
+        <div className="mb-6">
+          <div className="flex justify-between text-xs mb-1.5">
+            <span className="text-neutral-400">Tempo / Speed</span>
+            <span className="font-mono text-rose-400 font-bold">{bpm} BPM</span>
+          </div>
+          <input
+            id="drum-bpm-slider"
+            type="range"
+            min="60"
+            max="180"
+            step="1"
+            value={bpm}
+            onChange={(e) => setBpm(parseInt(e.target.value))}
+            className="w-full accent-rose-500 h-1 bg-neutral-950 rounded-lg cursor-pointer"
+          />
+        </div>
+
+        {/* Sequencer step visual lights */}
+        <div className="mb-4 bg-neutral-950 p-3 rounded-xl border border-neutral-800/80">
+          <div className="flex justify-between items-center mb-2">
+            <span className="text-[10px] font-mono text-neutral-500">BEAT GRID</span>
+            <span className="text-[9px] font-mono text-rose-500/60 flex items-center gap-1">
+              <Activity className="w-3 h-3 animate-pulse" />
+              1/8 SEQ
+            </span>
+          </div>
+          <div className="grid grid-cols-8 gap-1">
+            {Array.from({ length: STEPS }).map((_, stepIdx) => {
+              const isActiveStep = currentStep === stepIdx && isPlaying;
+              const hasKick = PATTERNS[activePattern]?.kick[stepIdx];
+              const hasSnare = PATTERNS[activePattern]?.snare[stepIdx];
+
+              let borderLight = 'border-neutral-850 bg-neutral-900/40';
+              if (hasKick) borderLight = 'border-neutral-700 bg-neutral-800/60';
+              if (hasSnare) borderLight = 'border-rose-950 bg-rose-950/20';
+
+              return (
+                <div
+                  id={`seq-step-${stepIdx}`}
+                  key={stepIdx}
+                  className={`h-6 rounded flex items-center justify-center transition-all border ${borderLight} ${
+                    isActiveStep
+                      ? 'bg-rose-500 border-rose-400 scale-105 shadow-[0_0_8px_#f43f5e]'
+                      : ''
+                  }`}
+                >
+                  <span className={`text-[9px] font-mono ${isActiveStep ? 'text-black font-bold' : 'text-neutral-600'}`}>
+                    {stepIdx + 1}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
+
+      {/* Control Buttons */}
+      <button
+        id="toggle-drums-btn"
+        onClick={handleTogglePlay}
+        className={`w-full py-3 rounded-xl flex items-center justify-center gap-2 text-xs font-bold transition duration-150 shadow-md ${
+          isPlaying
+            ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-[0_0_15px_rgba(244,63,94,0.3)] animate-pulse'
+            : 'bg-neutral-950 border border-neutral-800 hover:bg-neutral-800 text-rose-400 hover:text-rose-300'
+        }`}
+      >
+        {isPlaying ? (
+          <>
+            <Square className="w-4 h-4 fill-current" />
+            Stop Rhythm Loop
+          </>
+        ) : (
+          <>
+            <Play className="w-4 h-4 fill-current" />
+            Start Rhythm Companion
+          </>
+        )}
+      </button>
     </div>
   );
-};
+}

@@ -1,166 +1,172 @@
-// Pitch Detection Utilities
+import { PitchData } from '../types';
+
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
 /**
- * Perform autocorrelation-based pitch detection on a buffer of audio samples.
- * Returns the estimated fundamental frequency in Hz, and a confidence score.
+ * Converts frequency to MIDI note number
  */
-export function autoCorrelate(buffer: Float32Array, sampleRate: number): { frequency: number; confidence: number } {
-  const size = buffer.length;
-  
-  // Calculate root-mean-square (RMS) amplitude to detect silence/noise gate
-  let rms = 0;
-  for (let i = 0; i < size; i++) {
-    const val = buffer[i];
-    rms += val * val;
+export function frequencyToMidi(frequency: number): number {
+  return Math.round(12 * Math.log2(frequency / 440) + 69);
+}
+
+/**
+ * Converts MIDI note to fundamental frequency in Hz
+ */
+export function midiToFrequency(midiNote: number): number {
+  return 440 * Math.pow(2, (midiNote - 69) / 12);
+}
+
+/**
+ * Converts MIDI note to its musical name
+ */
+export function midiToNoteName(midiNote: number): string {
+  const noteIndex = (midiNote % 12 + 12) % 12;
+  const octave = Math.floor(midiNote / 12) - 1;
+  return `${NOTE_NAMES[noteIndex]}${octave}`;
+}
+
+/**
+ * High-performance autocorrelation algorithm optimized for guitar frequency ranges.
+ * Includes parabolic peak interpolation for sub-cent tuning dial precision.
+ */
+export function autoCorrelate(
+  buffer: Float32Array,
+  sampleRate: number,
+  thresholdDb = -45, // noise gate
+  minClarity = 0.85   // confidence threshold
+): PitchData | null {
+  // 1. Calculate signal power/root-mean-square (RMS)
+  let sumSquares = 0;
+  for (let i = 0; i < buffer.length; i++) {
+    sumSquares += buffer[i] * buffer[i];
   }
-  rms = Math.sqrt(rms / size);
-  
-  // Silence threshold: If signal is too quiet, do not attempt pitch detection
-  if (rms < 0.005) {
-    return { frequency: -1, confidence: 0 };
+  const rms = Math.sqrt(sumSquares / buffer.length);
+  const db = 20 * Math.log10(rms || 1e-5);
+
+  // If signal is too quiet, it's silence/noise
+  if (db < thresholdDb) {
+    return null;
   }
 
-  // Clip buffer to ignore silent leading/trailing edges and highlight peaks (Center clipping)
-  // This is a common pre-processing step for pitch detection
-  const clippedBuffer = new Float32Array(size);
-  let maxVal = 0;
-  for (let i = 0; i < size; i++) {
-    maxVal = Math.max(maxVal, Math.abs(buffer[i]));
+  // 2. Downsample buffer by a factor of 4 to boost performance by ~16x
+  const downsampleFactor = 4;
+  const dsSampleRate = sampleRate / downsampleFactor; // e.g. 11025Hz
+  const dsLength = Math.floor(buffer.length / downsampleFactor);
+  
+  if (dsLength < 32) {
+    return null;
   }
-  const clipThreshold = maxVal * 0.15;
-  for (let i = 0; i < size; i++) {
-    const val = buffer[i];
-    if (Math.abs(val) > clipThreshold) {
-      clippedBuffer[i] = val > 0 ? val - clipThreshold : val + clipThreshold;
+  
+  const dsBuffer = new Float32Array(dsLength);
+  for (let i = 0; i < dsLength; i++) {
+    // Simple 4-point moving average acts as an anti-aliasing lowpass filter
+    const idx = i * downsampleFactor;
+    dsBuffer[i] = (buffer[idx] + buffer[idx + 1] + buffer[idx + 2] + buffer[idx + 3]) / 4;
+  }
+
+  // 3. Perform center clipping to boost fundamental frequency peaks and suppress harmonics
+  const clippedBuffer = new Float32Array(dsLength);
+  let maxVal = 0;
+  for (let i = 0; i < dsLength; i++) {
+    maxVal = Math.max(maxVal, Math.abs(dsBuffer[i]));
+  }
+  const clipLevel = maxVal * 0.3; // 30% center clip
+  for (let i = 0; i < dsLength; i++) {
+    if (Math.abs(dsBuffer[i]) > clipLevel) {
+      clippedBuffer[i] = dsBuffer[i] > 0 ? dsBuffer[i] - clipLevel : dsBuffer[i] + clipLevel;
     } else {
       clippedBuffer[i] = 0;
     }
   }
 
-  // Define search bounds for guitar pitch (approx 50Hz to 1600Hz)
-  const minFreq = 50;
-  const maxFreq = 1600;
-  const maxPeriod = Math.round(sampleRate / minFreq); // max delay
-  const minPeriod = Math.round(sampleRate / maxFreq); // min delay
+  // 4. Autocorrelation over the guitar frequency range (50Hz to 1600Hz)
+  const maxPeriod = Math.floor(dsSampleRate / 50);    // ~220 samples at 11025Hz
+  const minPeriod = Math.floor(dsSampleRate / 1600);  // ~6 samples at 11025Hz
   
-  const r = new Float32Array(maxPeriod + 1);
-  
-  // Compute autocorrelation for relevant delays
-  for (let tau = minPeriod; tau <= maxPeriod; tau++) {
+  const r = new Float32Array(maxPeriod + 2);
+  let bestPeriod = -1;
+
+  for (let tau = minPeriod; tau < maxPeriod; tau++) {
+    if (tau >= dsLength) break;
     let sum = 0;
-    for (let t = 0; t < size - tau; t++) {
-      sum += clippedBuffer[t] * clippedBuffer[t + tau];
+    for (let i = 0; i < dsLength - tau; i++) {
+      sum += clippedBuffer[i] * clippedBuffer[i + tau];
     }
     r[tau] = sum;
   }
 
-  // Find the primary peak in the autocorrelation array
-  let bestPeriod = -1;
-  let maxR = -1;
+  // 5. Find the absolute peak in the search range
+  let peakThreshold = 0;
+  for (let tau = minPeriod; tau < maxPeriod; tau++) {
+    if (tau >= dsLength) break;
+    peakThreshold = Math.max(peakThreshold, r[tau]);
+  }
   
-  // A peak is a local maximum
-  for (let tau = minPeriod + 1; tau < maxPeriod; tau++) {
-    if (r[tau] > r[tau - 1] && r[tau] > r[tau + 1]) {
-      if (bestPeriod === -1 || r[tau] > maxR) {
+  // Peak must be at least 35% of absolute max correlation
+  const cutoff = peakThreshold * 0.35;
+
+  for (let tau = minPeriod; tau < maxPeriod - 1; tau++) {
+    if (tau >= dsLength - 1) break;
+    // Is local maximum?
+    if (r[tau] > r[tau - 1] && r[tau] > r[tau + 1] && r[tau] > cutoff) {
+      if (bestPeriod === -1 || r[tau] > r[bestPeriod]) {
         bestPeriod = tau;
-        maxR = r[tau];
       }
     }
   }
 
-  if (bestPeriod === -1 || maxR <= 0) {
-    return { frequency: -1, confidence: 0 };
+  if (bestPeriod === -1 || bestPeriod <= minPeriod || bestPeriod >= maxPeriod - 1) {
+    return null;
   }
 
-  // Calculate self-similarity score (confidence)
-  let sumSquare0 = 0;
-  let sumSquarePeriod = 0;
-  for (let t = 0; t < size - bestPeriod; t++) {
-    sumSquare0 += clippedBuffer[t] * clippedBuffer[t];
-    sumSquarePeriod += clippedBuffer[t + bestPeriod] * clippedBuffer[t + bestPeriod];
+  // 6. Parabolic interpolation of the peak for sub-sample accuracy
+  const alpha = r[bestPeriod - 1];
+  const beta = r[bestPeriod];
+  const gamma = r[bestPeriod + 1];
+  
+  const denominator = 2 * beta - alpha - gamma;
+  let periodAdjustment = 0;
+  if (denominator !== 0) {
+    periodAdjustment = 0.5 * (alpha - gamma) / denominator;
   }
-  const denominator = Math.sqrt(sumSquare0 * sumSquarePeriod);
-  const confidence = denominator > 0 ? maxR / denominator : 0;
+  
+  const exactPeriodDs = bestPeriod + periodAdjustment;
+  const exactPeriod = exactPeriodDs * downsampleFactor;
+  const frequency = sampleRate / exactPeriod;
 
-  // We require a minimum confidence to avoid spurious noise-matching
-  if (confidence < 0.4) {
-    return { frequency: -1, confidence };
-  }
-
-  // Parabolic interpolation for sub-sample accuracy
-  let interpolatedPeriod = bestPeriod;
-  if (bestPeriod > minPeriod && bestPeriod < maxPeriod) {
-    const alpha = r[bestPeriod - 1];
-    const beta = r[bestPeriod];
-    const gamma = r[bestPeriod + 1];
-    
-    const denom = alpha - 2 * beta + gamma;
-    if (denom !== 0) {
-      const delta = 0.5 * (alpha - gamma) / denom;
-      interpolatedPeriod = bestPeriod + delta;
+  // 7. Calculate clarity (normalized correlation coefficient)
+  let normDenom = 0;
+  let sumClippedSq = 0;
+  let sumShiftedSq = 0;
+  const intPeriod = Math.round(exactPeriodDs);
+  
+  if (intPeriod < dsLength) {
+    for (let i = 0; i < dsLength - intPeriod; i++) {
+      sumClippedSq += clippedBuffer[i] * clippedBuffer[i];
+      sumShiftedSq += clippedBuffer[i + intPeriod] * clippedBuffer[i + intPeriod];
     }
-  }
-
-  const frequency = sampleRate / interpolatedPeriod;
-  
-  // Sanity check frequency
-  if (frequency >= minFreq && frequency <= maxFreq) {
-    return { frequency, confidence: Math.min(1, confidence) };
-  }
-
-  return { frequency: -1, confidence: 0 };
-}
-
-/**
- * Standard note names in an octave.
- */
-export const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-
-/**
- * Convert frequency in Hz to MIDI note number and cents offset.
- */
-export function frequencyToMidi(frequency: number): { midiNote: number; noteName: string; centsOffset: number } {
-  // MIDI Note 69 is A4 (440Hz)
-  const noteNum = 12 * Math.log2(frequency / 440) + 69;
-  const midiNote = Math.round(noteNum);
-  const centsOffset = Math.round((noteNum - midiNote) * 100);
-  
-  const octave = Math.floor(midiNote / 12) - 1;
-  const noteNameIndex = (midiNote % 12 + 12) % 12;
-  const noteName = `${NOTE_NAMES[noteNameIndex]}${octave}`;
-  
-  return { midiNote, noteName, centsOffset };
-}
-
-/**
- * Standard guitar string frequencies (Standard E-tuning)
- */
-export const STANDARD_TUNING_FREQS = [
-  { note: "E4", freq: 329.63, stringName: "1st (E)" },
-  { note: "B3", freq: 246.94, stringName: "2nd (B)" },
-  { note: "G3", freq: 196.00, stringName: "3rd (G)" },
-  { note: "D3", freq: 146.83, stringName: "4th (D)" },
-  { note: "A2", freq: 110.00, stringName: "5th (A)" },
-  { note: "E2", freq: 82.41,  stringName: "6th (E)" },
-];
-
-/**
- * Map a MIDI Note number back to the closest guitar string and fret
- */
-export function getFretboardPosition(midiNote: number, tuningMidi: number[]): { stringIndex: number; fret: number }[] {
-  const positions: { stringIndex: number; fret: number }[] = [];
-  
-  // Check each string to see if the note can be played on it
-  // standard tuningMidi: [64, 59, 55, 50, 45, 40]
-  for (let stringIndex = 0; stringIndex < tuningMidi.length; stringIndex++) {
-    const stringBaseMidi = tuningMidi[stringIndex];
-    const fret = midiNote - stringBaseMidi;
-    
-    // Guitar fretboards usually have 21-24 frets. Let's assume open string (0) to 24 frets.
-    if (fret >= 0 && fret <= 24) {
-      positions.push({ stringIndex, fret });
-    }
+    normDenom = Math.sqrt(sumClippedSq * sumShiftedSq);
   }
   
-  return positions;
+  const clarity = normDenom > 0 ? r[intPeriod] / normDenom : 0;
+
+  // Filter out noisy/unclear signals
+  if (clarity < minClarity) {
+    return null;
+  }
+
+  // 8. Calculate MIDI info
+  const midiNote = frequencyToMidi(frequency);
+  const targetFreq = midiToFrequency(midiNote);
+  const centsDeviation = 1200 * Math.log2(frequency / targetFreq);
+  const noteName = midiToNoteName(midiNote);
+
+  return {
+    frequency,
+    noteName,
+    midiNote,
+    centsDeviation,
+    clarity,
+    db
+  };
 }

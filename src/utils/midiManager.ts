@@ -1,132 +1,178 @@
-// Web MIDI API Manager
-import { MidiOutput } from '../types';
+import { MidiLogMessage } from '../types';
 
 export class MidiManager {
   private midiAccess: any = null;
-  private selectedOutput: MidiOutput | null = null;
-  private onOutputsChanged: (outputs: MidiOutput[]) => void = () => {};
+  private selectedOutput: any = null;
+  private onLogCallback: ((message: MidiLogMessage) => void) | null = null;
+  private activeNotes: Map<number, number> = new Map(); // midiNote -> velocity
 
-  public async requestAccess(onOutputsChanged: (outputs: MidiOutput[]) => void): Promise<boolean> {
-    this.onOutputsChanged = onOutputsChanged;
-    
-    const nav = navigator as any;
-    if (!nav.requestMIDIAccess) {
-      console.warn("Web MIDI API is not supported in this browser.");
-      return false;
+  constructor() {
+    this.initMidi();
+  }
+
+  private async initMidi() {
+    if (typeof navigator === 'undefined' || !navigator.requestMIDIAccess) {
+      this.logSystem('Web MIDI API is not supported in this browser.');
+      return;
     }
 
     try {
-      this.midiAccess = await nav.requestMIDIAccess();
-      
-      // Listen for hardware connections/disconnections
-      this.midiAccess.onstatechange = () => {
-        this.triggerOutputsChanged();
-      };
-      
-      this.triggerOutputsChanged();
-      return true;
-    } catch (err) {
-      console.error("Error accessing Web MIDI API:", err);
-      return false;
-    }
-  }
+      this.midiAccess = await navigator.requestMIDIAccess();
+      if (!this.midiAccess) return;
 
-  private triggerOutputsChanged() {
-    if (!this.midiAccess) return;
-    const outputs: MidiOutput[] = [];
-    this.midiAccess.outputs.forEach((output: any) => {
-      outputs.push({
-        id: output.id,
-        name: output.name,
-        send: (data: number[] | Uint8Array) => output.send(data)
-      });
-    });
-    this.onOutputsChanged(outputs);
-    
-    // Select first output by default if none is selected
-    if (outputs.length > 0 && !this.selectedOutput) {
-      this.selectedOutput = outputs[0];
-    }
-  }
-
-  public selectOutput(deviceId: string) {
-    if (!this.midiAccess) return;
-    let found = false;
-    this.midiAccess.outputs.forEach((output: any) => {
-      if (output.id === deviceId) {
-        this.selectedOutput = {
-          id: output.id,
-          name: output.name,
-          send: (data: number[] | Uint8Array) => output.send(data)
-        };
-        found = true;
+      const outputs = Array.from(this.midiAccess.outputs.values());
+      
+      if (outputs.length > 0) {
+        // Automatically select first available MIDI output port
+        this.selectedOutput = outputs[0];
+        this.logSystem(`Connected to MIDI Output: ${this.selectedOutput.name}`);
+      } else {
+        this.logSystem('No MIDI outputs detected. Use virtual synth or connect hardware.');
       }
-    });
-    if (!found) {
-      this.selectedOutput = null;
+
+      this.midiAccess.onstatechange = (event: any) => {
+        const port = event.port;
+        if (port.type === 'output') {
+          const currentOutputs = Array.from(this.midiAccess.outputs.values());
+          if (currentOutputs.length > 0 && !this.selectedOutput) {
+            this.selectedOutput = currentOutputs[0];
+            this.logSystem(`Connected to MIDI Output: ${this.selectedOutput.name}`);
+          } else if (currentOutputs.length === 0) {
+            this.selectedOutput = null;
+            this.logSystem('MIDI Output disconnected.');
+          }
+        }
+      };
+    } catch (err) {
+      this.logSystem(`Failed to initialize MIDI: ${err}`);
     }
   }
 
-  public sendNoteOn(midiNote: number, velocity: number = 0.8, channel: number = 0) {
-    if (!this.selectedOutput) return;
+  public getOutputs(): any[] {
+    if (!this.midiAccess) return [];
+    return Array.from(this.midiAccess.outputs.values());
+  }
 
-    const noteOnByte = 0x90 | (channel & 0x0F);
-    const velByte = Math.round(velocity * 127) & 0x7F;
-    const noteByte = midiNote & 0x7F;
-
-    try {
-      this.selectedOutput.send([noteOnByte, noteByte, velByte]);
-    } catch (e) {
-      console.error("Error sending MIDI Note On:", e);
+  public selectOutput(portId: string) {
+    if (!this.midiAccess) return;
+    const outputs = this.getOutputs();
+    const found = outputs.find(o => o.id === portId);
+    if (found) {
+      this.selectedOutput = found;
+      this.logSystem(`Switched MIDI Output to: ${found.name}`);
     }
   }
 
-  public sendNoteOff(midiNote: number, channel: number = 0) {
-    if (!this.selectedOutput) return;
+  public registerLogCallback(callback: (message: MidiLogMessage) => void) {
+    this.onLogCallback = callback;
+  }
 
-    const noteOffByte = 0x80 | (channel & 0x0F);
-    const noteByte = midiNote & 0x7F;
-
-    try {
-      this.selectedOutput.send([noteOffByte, noteByte, 0]);
-    } catch (e) {
-      console.error("Error sending MIDI Note Off:", e);
+  private logSystem(text: string) {
+    if (this.onLogCallback) {
+      this.onLogCallback({
+        id: Math.random().toString(36).substring(7),
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'Pitch Bend', // use Pitch Bend for status messages or log them clearly
+        note: 0,
+        noteName: 'SYS',
+        velocity: 0,
+        extra: text
+      });
     }
   }
 
   /**
-   * Send MIDI Pitch Bend based on cents offset.
-   * Assumes a standard pitch bend range of +/- 2 semitones (+/- 200 cents).
+   * Send a Note On message (0x90)
    */
-  public sendPitchBend(centsOffset: number, channel: number = 0) {
-    if (!this.selectedOutput) return;
+  public sendNoteOn(midiNote: number, velocity = 100) {
+    if (this.activeNotes.has(midiNote)) return; // Prevent double trigger
+    this.activeNotes.set(midiNote, velocity);
 
-    // Pitch bend range of +/- 200 cents. Map -100..+100 cents to bendValue
-    // Midpoint is 8192 (no bend)
-    // Range is 0 to 16383
-    const centsPercent = centsOffset / 200; // -0.5 to +0.5
-    const bendValue = Math.max(0, Math.min(16383, Math.round(8192 + centsPercent * 8192)));
+    if (this.selectedOutput) {
+      try {
+        const noteOnMessage = [0x90, midiNote, velocity];
+        this.selectedOutput.send(noteOnMessage);
+      } catch (e) {
+        console.error('Error sending MIDI Note On:', e);
+      }
+    }
 
-    const pitchBendByte = 0xE0 | (channel & 0x0F);
-    const lsb = bendValue & 0x7F;
-    const msb = (bendValue >> 7) & 0x7F;
-
-    try {
-      this.selectedOutput.send([pitchBendByte, lsb, msb]);
-    } catch (e) {
-      console.error("Error sending MIDI Pitch Bend:", e);
+    if (this.onLogCallback) {
+      this.onLogCallback({
+        id: Math.random().toString(36).substring(7),
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'Note On',
+        note: midiNote,
+        noteName: this.getNoteName(midiNote),
+        velocity,
+        extra: this.selectedOutput ? `Sent to ${this.selectedOutput.name}` : 'Virtual Synth Only'
+      });
     }
   }
 
-  public sendAllNotesOff(channel: number = 0) {
-    if (!this.selectedOutput) return;
-    
-    // Command 123 (All Notes Off) on Control Change
-    const ccByte = 0xB0 | (channel & 0x0F);
-    try {
-      this.selectedOutput.send([ccByte, 123, 0]);
-    } catch (e) {
-      console.error("Error sending MIDI All Notes Off:", e);
+  /**
+   * Send a Note Off message (0x80)
+   */
+  public sendNoteOff(midiNote: number) {
+    if (!this.activeNotes.has(midiNote)) return;
+    this.activeNotes.delete(midiNote);
+
+    if (this.selectedOutput) {
+      try {
+        const noteOffMessage = [0x80, midiNote, 0];
+        this.selectedOutput.send(noteOffMessage);
+      } catch (e) {
+        console.error('Error sending MIDI Note Off:', e);
+      }
     }
+
+    if (this.onLogCallback) {
+      this.onLogCallback({
+        id: Math.random().toString(36).substring(7),
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'Note Off',
+        note: midiNote,
+        noteName: this.getNoteName(midiNote),
+        velocity: 0,
+        extra: this.selectedOutput ? `Sent to ${this.selectedOutput.name}` : 'Virtual Synth Only'
+      });
+    }
+  }
+
+  /**
+   * Send a Pitch Bend message (0xE0)
+   * cents range: -100 to +100
+   */
+  public sendPitchBend(cents: number) {
+    if (!this.selectedOutput) return;
+
+    // Pitch Bend is a 14-bit value: 0x0000 to 0x3FFF (0 to 16383), center is 0x2000 (8192)
+    // Assume +/- 2 semitones default pitch bend range (200 cents total bend)
+    const rangeCents = 200; 
+    const norm = Math.max(-1, Math.min(1, cents / rangeCents));
+    const bendValue = Math.round(8192 + norm * 8191);
+
+    const lsb = bendValue & 0x7F;       // Lower 7 bits
+    const msb = (bendValue >> 7) & 0x7F; // Upper 7 bits
+
+    try {
+      this.selectedOutput.send([0xE0, lsb, msb]);
+    } catch (e) {
+      console.error('Error sending MIDI Pitch Bend:', e);
+    }
+  }
+
+  private getNoteName(midiNote: number): string {
+    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const idx = (midiNote % 12 + 12) % 12;
+    const oct = Math.floor(midiNote / 12) - 1;
+    return `${names[idx]}${oct}`;
+  }
+
+  public clearAll() {
+    this.activeNotes.forEach((_, note) => {
+      this.sendNoteOff(note);
+    });
+    this.activeNotes.clear();
   }
 }

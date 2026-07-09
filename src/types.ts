@@ -1,68 +1,67 @@
-export type WaveType = 'sine' | 'square' | 'sawtooth' | 'triangle' | 'noise' | 'piano';
+export type OscillatorType = 'sine' | 'square' | 'sawtooth' | 'triangle' | 'unison' | 'nylon' | 'sax' | 'strings' | 'violin' | 'piano' | 'bass';
+
+export type HarmonizerMode = 'off' | 'octave-up' | 'octave-down' | 'fifth' | 'fourth' | 'power' | 'major-triad' | 'minor-triad';
 
 export interface SynthSettings {
-  preset: string;
-  waveType: WaveType;
-  attack: number;  // seconds
-  decay: number;   // seconds
-  sustain: number; // 0 to 1
-  release: number; // seconds
-  filterCutoff: number; // Hz
-  filterResonance: number; // Q factor
-  distortion: number; // 0 to 1
-  delayTime: number; // seconds
-  delayFeedback: number; // 0 to 1
-  reverbWet: number; // 0 to 1
-  volume: number; // 0 to 1
-  polyphonic: boolean;
-  octaveOffset: number; // -2 to 2
-  unisonVoices: number; // 1 to 7
-  unisonDetune: number; // 0 to 50 cents
-  voiceBoxEnabled: boolean;
-  voiceBoxVowel: 'A' | 'E' | 'I' | 'O' | 'U';
-  voiceBoxModRate: number; // 0 to 10 Hz for auto-morphing talkbox sweep
-  voiceBoxModDepth: number; // 0 to 1 for morph depth
-}
-
-export interface MidiMessageLog {
-  id: string;
-  type: 'Note On' | 'Note Off' | 'Pitch Bend';
-  channel: number;
-  note?: number;
-  noteName?: string;
-  value: number; // velocity for Note On, bend amount for Pitch Bend
-  timestamp: string;
+  oscType: OscillatorType;
+  cutoff: number;
+  Q: number;
+  attack: number;
+  decay: number;
+  sustain: number;
+  release: number;
+  volume: number;
+  glide: number;
+  // Latency & performance optimization setting
+  latencyLevel?: 'ultra-low' | 'low' | 'balanced' | 'high';
+  // Audio Polyphony / String Ringout
+  audioPolyphonyEnabled?: boolean;
+  audioPolyphonyDecay?: number; // 0.5 to 3.0s ringout duration
+  // Pitch Shifter / Transposition
+  pitchShift?: number; // coarse tune in semitones (-24 to +24)
+  fineTune?: number; // fine tune in cents (-100 to +100)
+  // Harmonizer
+  harmonizerMode?: HarmonizerMode;
+  // Pinch Harmonics
+  pinchHarmonicsEnabled?: boolean;
+  pinchHarmonicsLevel?: number; // 0 to 1
+  // Delay / Space Echo Effect
+  delayEnabled?: boolean;
+  delayTime?: number; // 0.1 to 1.0s
+  delayFeedback?: number; // 0 to 0.95
+  delayWet?: number; // 0 to 0.8
+  // Noise Gate Threshold
+  noiseGate?: number; // -45 to -20 dB
 }
 
 export interface PitchData {
   frequency: number;
   noteName: string;
   midiNote: number;
-  centsOffset: number;
-  confidence: number;
-  amplitude: number;
+  centsDeviation: number;
+  clarity: number; // 0 to 1, representing confidence of autocorrelation
+  db: number; // amplitude in dB
 }
 
-export interface FretboardPosition {
-  stringIndex: number; // 0 = high E, 5 = low E
-  fret: number;
-}
-
-export interface Tuning {
-  name: string;
-  notes: string[]; // e.g. ["E4", "B3", "G3", "D3", "A2", "E2"]
-  midiNumbers: number[]; // e.g. [64, 59, 55, 50, 45, 40]
-}
-
-export interface InstrumentPreset {
+export interface MidiLogMessage {
   id: string;
-  name: string;
-  settings: Partial<SynthSettings>;
+  timestamp: string;
+  type: 'Note On' | 'Note Off' | 'Pitch Bend';
+  note: number;
+  noteName: string;
+  velocity: number;
+  extra?: string;
 }
 
-export interface MidiOutput {
-  id: string;
-  name?: string;
-  send: (data: number[] | Uint8Array) => void;
+export interface DrumStep {
+  kick: boolean;
+  snare: boolean;
+  hihat: boolean;
 }
 
+export interface ActiveNote {
+  note: number;
+  frequency: number;
+  startTime: number;
+  source: 'audio' | 'keyboard' | 'fretboard';
+}

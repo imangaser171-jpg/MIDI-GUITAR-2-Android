@@ -1,6 +1,10 @@
 {
-  "name": "Guitar Audio to MIDI Synth",
-  "description": "A real-time guitar audio-to-MIDI synthesizer and digital tuner. Converts microphone audio into MIDI notes to drive built-in synthesizers or external MIDI devices.",
-  "requestFramePermissions": ["microphone"],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "name": "Guitar Audio to MIDI Converter & Tuner Station",
+  "description": "An advanced, high-precision real-time guitar audio-to-MIDI converter, digital pitch tuner, polyphonic synthesizer, and drum practice station.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

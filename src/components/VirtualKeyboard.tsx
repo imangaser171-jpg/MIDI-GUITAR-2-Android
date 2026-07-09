@@ -1,142 +1,134 @@
-import React from 'react';
-import { Keyboard } from 'lucide-react';
+import { ActiveNote } from '../types';
 
 interface VirtualKeyboardProps {
-  activeSynthNotes: Set<number>;
-  onNoteOn: (midiNote: number) => void;
-  onNoteOff: (midiNote: number) => void;
+  activeNotes: ActiveNote[];
+  onNoteOn: (note: number, velocity: number) => void;
+  onNoteOff: (note: number) => void;
 }
 
-export const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({
-  activeSynthNotes,
-  onNoteOn,
-  onNoteOff,
-}) => {
-  // Generate 2 octaves C3 (Midi 48) to C5 (Midi 72)
-  const startMidi = 48;
-  const keysCount = 25; // 2 octaves + top C
+// C3 to C5 (MIDI 48 to 72)
+const START_MIDI = 48;
+const END_MIDI = 72;
 
-  // Standard piano keys configuration
-  // 0 = white, 1 = black
-  const keyOffsets = [0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0];
-  const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+// Check if a MIDI note is a black key
+const isBlackKey = (note: number): boolean => {
+  const mod = note % 12;
+  return [1, 3, 6, 8, 10].includes(mod);
+};
 
-  const isBlackKey = (midi: number): boolean => {
-    const offset = (midi - startMidi) % 12;
-    return keyOffsets[offset] === 1;
+const getNoteName = (note: number): string => {
+  const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  return names[note % 12];
+};
+
+export function VirtualKeyboard({ activeNotes, onNoteOn, onNoteOff }: VirtualKeyboardProps) {
+  const notes: number[] = [];
+  for (let i = START_MIDI; i <= END_MIDI; i++) {
+    notes.push(i);
+  }
+
+  const isNoteActive = (note: number) => {
+    return activeNotes.some(n => n.note === note);
   };
 
-  const getKeyName = (midi: number): string => {
-    const idx = (midi - startMidi) % 12;
-    const octave = Math.floor(midi / 12) - 1;
-    return `${noteNames[idx]}${octave}`;
+  const handleKeyMouseDown = (note: number) => {
+    onNoteOn(note, 100);
   };
 
-  // Separate keys into White and Black for rendering correctly overlayed
-  const keysList = Array.from({ length: keysCount }).map((_, idx) => {
-    const midi = startMidi + idx;
-    return {
-      midi,
-      isBlack: isBlackKey(midi),
-      name: getKeyName(midi),
-    };
-  });
+  const handleKeyMouseUp = (note: number) => {
+    onNoteOff(note);
+  };
+
+  // Group notes into white and black lists for visual overlay alignment
+  const whiteKeys = notes.filter(n => !isBlackKey(n));
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-xl w-full">
-      {/* Header */}
+    <div id="virtual-keyboard-card" className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 shadow-xl">
       <div className="flex justify-between items-center mb-4">
-        <h3 className="font-display font-medium text-lg text-zinc-200 flex items-center gap-2">
-          <Keyboard className="w-5 h-5 text-indigo-400" /> Virtual Keyboard Playpen
-        </h3>
+        <div>
+          <h2 className="text-sm font-semibold tracking-wider text-neutral-400 uppercase flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
+            Piano Keyboard Monitor & Synth Input
+          </h2>
+          <p className="text-xs text-neutral-500 mt-1">
+            2-Octave Range (C3 - C5) • Supports multi-touch and mouse clicks
+          </p>
+        </div>
       </div>
-      <p className="text-xs text-zinc-500 mb-6">
-        Click or touch keys to play the virtual synthesizer manually and audition sound presets (C3 to C5).
-      </p>
 
-      {/* Piano Container */}
-      <div className="relative w-full h-44 bg-zinc-950 p-2 rounded-2xl border border-zinc-850 flex select-none overflow-x-auto">
-        <div className="relative flex flex-1 min-w-[500px] h-full">
-          {/* White keys render */}
-          {keysList
-            .filter((k) => !k.isBlack)
-            .map((key) => {
-              const active = activeSynthNotes.has(key.midi);
-              return (
+      {/* Piano Keyboard Wrapper */}
+      <div className="relative overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-neutral-800 scrollbar-track-transparent">
+        <div className="relative flex min-w-[620px] h-36 bg-neutral-950 p-2 rounded-xl border border-neutral-800 select-none">
+          {whiteKeys.map((note) => {
+            const active = isNoteActive(note);
+            const isC = getNoteName(note) === 'C';
+
+            return (
+              <div
+                id={`white-key-${note}`}
+                key={note}
+                className="relative flex-1"
+                onMouseDown={() => handleKeyMouseDown(note)}
+                onMouseUp={() => handleKeyMouseUp(note)}
+                onMouseLeave={() => active && handleKeyMouseUp(note)}
+                onTouchStart={(e) => { e.preventDefault(); handleKeyMouseDown(note); }}
+                onTouchEnd={(e) => { e.preventDefault(); handleKeyMouseUp(note); }}
+              >
+                {/* White Key shape */}
                 <div
-                  key={key.midi}
-                  onMouseDown={() => onNoteOn(key.midi)}
-                  onMouseUp={() => onNoteOff(key.midi)}
-                  onMouseLeave={() => activeSynthNotes.has(key.midi) && onNoteOff(key.midi)}
-                  onTouchStart={(e) => {
-                    e.preventDefault();
-                    onNoteOn(key.midi);
-                  }}
-                  onTouchEnd={(e) => {
-                    e.preventDefault();
-                    onNoteOff(key.midi);
-                  }}
-                  className={`flex-1 border-r border-zinc-850 rounded-b-lg flex flex-col justify-end items-center pb-2 transition-all cursor-pointer ${
+                  className={`w-full h-full border-r border-b border-neutral-800 rounded-b-md transition-all duration-75 flex flex-col justify-end items-center pb-2 cursor-pointer ${
                     active
-                      ? 'bg-gradient-to-t from-indigo-600 to-indigo-500 shadow-inner text-white'
-                      : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-500 hover:text-zinc-700'
+                      ? 'bg-indigo-500 border-indigo-400 text-white shadow-[0_0_15px_rgba(99,102,241,0.5)] h-[98%] mt-[2%]'
+                      : 'bg-neutral-100 hover:bg-neutral-200 text-neutral-500'
                   }`}
-                  id={`kb-white-${key.midi}`}
                 >
-                  <span className="text-[9px] font-mono font-bold leading-none select-none">
-                    {key.name}
-                  </span>
+                  {isC && (
+                    <span className="text-[10px] font-bold font-mono">
+                      C{Math.floor(note / 12) - 1}
+                    </span>
+                  )}
                 </div>
-              );
-            })}
 
-          {/* Black keys overlayed */}
-          <div className="absolute top-0 left-0 right-0 h-[60%] flex pointer-events-none">
-            {keysList.map((key, idx) => {
-              if (!key.isBlack) {
-                // Return an empty transparent spacer for white keys to maintain horizontal alignment
-                return <div key={`spacer-${key.midi}`} className="flex-1 pointer-events-none"></div>;
-              }
-
-              // Since black keys sit between white keys, align them offset
-              const active = activeSynthNotes.has(key.midi);
-              
-              return (
-                <div
-                  key={key.midi}
-                  onMouseDown={() => onNoteOn(key.midi)}
-                  onMouseUp={() => onNoteOff(key.midi)}
-                  onMouseLeave={() => activeSynthNotes.has(key.midi) && onNoteOff(key.midi)}
-                  onTouchStart={(e) => {
-                    e.preventDefault();
-                    onNoteOn(key.midi);
-                  }}
-                  onTouchEnd={(e) => {
-                    e.preventDefault();
-                    onNoteOff(key.midi);
-                  }}
-                  className={`absolute w-7 h-full z-20 rounded-b-md border border-black/30 flex flex-col justify-end items-center pb-1 transition-all cursor-pointer pointer-events-auto ${
-                    active
-                      ? 'bg-indigo-500 border-indigo-400 shadow-[0_0_8px_rgba(99,102,241,0.5)] text-white'
-                      : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-400'
-                  }`}
-                  style={{
-                    // Math calculations to perfectly center black keys over the borders of white keys
-                    // In a 25 key scale (including 15 white keys), each white key is 1/15th (approx 6.66%) wide.
-                    // This aligns them dynamically based on index
-                    left: `calc(${(idx / keysCount) * 100}% - 14px)`,
-                  }}
-                  id={`kb-black-${key.midi}`}
-                >
-                  <span className="text-[8px] font-mono leading-none select-none">
-                    {key.name.replace('#', '')}#
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+                {/* Overlaid Black Key to the right of this white key if appropriate */}
+                {/* Black keys occur after C (mod 0), D (2), F (5), G (7), A (9) */}
+                {[0, 2, 5, 7, 9].includes(note % 12) && note < END_MIDI && (
+                  <div
+                    id={`black-key-${note + 1}`}
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      handleKeyMouseDown(note + 1);
+                    }}
+                    onMouseUp={(e) => {
+                      e.stopPropagation();
+                      handleKeyMouseUp(note + 1);
+                    }}
+                    onMouseLeave={(e) => {
+                      e.stopPropagation();
+                      if (isNoteActive(note + 1)) handleKeyMouseUp(note + 1);
+                    }}
+                    onTouchStart={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleKeyMouseDown(note + 1);
+                    }}
+                    onTouchEnd={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleKeyMouseUp(note + 1);
+                    }}
+                    className={`absolute top-0 right-0 w-6 h-20 rounded-b-sm transition-all duration-75 cursor-pointer z-20 translate-x-3 shadow-md ${
+                      isNoteActive(note + 1)
+                        ? 'bg-purple-500 border border-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.6)] h-[19.5vw] md:h-[76px]'
+                        : 'bg-neutral-900 border-l border-r border-b border-neutral-800 hover:bg-neutral-800'
+                    }`}
+                    style={{ marginRight: '-12px' }}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
   );
-};
+}

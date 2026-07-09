@@ -1,961 +1,697 @@
-import { useState, useEffect, useRef } from 'react';
-import { 
-  WaveType, 
-  SynthSettings, 
-  MidiMessageLog, 
-  PitchData, 
-  Tuning,
-  MidiOutput
-} from './types';
-import { autoCorrelate, frequencyToMidi } from './utils/pitchDetector';
-import { SynthEngine } from './utils/synthEngine';
-import { MidiManager } from './utils/midiManager';
-import { TunerDial } from './components/TunerDial';
-import { GuitarFretboard } from './components/GuitarFretboard';
-import { SynthPanel } from './components/SynthPanel';
-import { MidiConsole } from './components/MidiConsole';
-import { VirtualKeyboard } from './components/VirtualKeyboard';
-import { DrumBeats } from './components/DrumBeats';
-import { 
-  Play, 
-  Square, 
-  Settings, 
-  Music, 
-  VolumeX, 
-  Volume2,
-  Sliders,
+import { useEffect, useRef, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  Activity,
+  Mic,
+  MicOff,
   HelpCircle,
-  Award,
-  ChevronRight,
-  BookOpen
+  Guitar,
+  Heart
 } from 'lucide-react';
 
-// Instrument presets config
-const INSTRUMENT_PRESETS = [
-  {
-    id: 'acoustic_piano',
-    name: 'Grand Piano',
-    settings: {
-      preset: 'acoustic_piano',
-      waveType: 'piano' as WaveType,
-      attack: 0.002,
-      decay: 1.2,
-      sustain: 0.15,
-      release: 0.35,
-      filterCutoff: 8000,
-      filterResonance: 1.0,
-      distortion: 0.0,
-      delayTime: 0.25,
-      delayFeedback: 0.08,
-      reverbWet: 0.25,
-      volume: 0.9,
-      polyphonic: true,
-      octaveOffset: 0,
-      unisonVoices: 1,
-      unisonDetune: 0,
-      voiceBoxEnabled: false,
-      voiceBoxVowel: 'A' as const,
-      voiceBoxModRate: 1.5,
-      voiceBoxModDepth: 0.5,
-    }
-  },
-  {
-    id: 'saw_lead',
-    name: 'Saw Lead',
-    settings: {
-      preset: 'saw_lead',
-      waveType: 'sawtooth' as WaveType,
-      attack: 0.01,
-      decay: 0.2,
-      sustain: 0.7,
-      release: 0.2,
-      filterCutoff: 4000,
-      filterResonance: 2,
-      distortion: 0.1,
-      delayTime: 0.3,
-      delayFeedback: 0.2,
-      reverbWet: 0.2,
-      volume: 0.8,
-      polyphonic: false,
-      octaveOffset: 0,
-      unisonVoices: 1,
-      unisonDetune: 0,
-      voiceBoxEnabled: false,
-      voiceBoxVowel: 'O' as const,
-      voiceBoxModRate: 2.0,
-      voiceBoxModDepth: 0.6,
-    }
-  },
-  {
-    id: 'cosmic_pad',
-    name: 'Cosmic Pad',
-    settings: {
-      preset: 'cosmic_pad',
-      waveType: 'triangle' as WaveType,
-      attack: 0.35,
-      decay: 0.5,
-      sustain: 0.9,
-      release: 0.8,
-      filterCutoff: 2200,
-      filterResonance: 1.2,
-      distortion: 0.0,
-      delayTime: 0.5,
-      delayFeedback: 0.4,
-      reverbWet: 0.55,
-      volume: 0.75,
-      polyphonic: true,
-      octaveOffset: 0,
-      unisonVoices: 3,
-      unisonDetune: 12,
-      voiceBoxEnabled: true, // Lush vocal pad
-      voiceBoxVowel: 'U' as const,
-      voiceBoxModRate: 0.6,
-      voiceBoxModDepth: 0.75,
-    }
-  },
-  {
-    id: 'retro_organ',
-    name: 'Retro Organ',
-    settings: {
-      preset: 'retro_organ',
-      waveType: 'square' as WaveType,
-      attack: 0.005,
-      decay: 0.1,
-      sustain: 1.0,
-      release: 0.08,
-      filterCutoff: 6500,
-      filterResonance: 1.0,
-      distortion: 0.0,
-      delayTime: 0.2,
-      delayFeedback: 0.0,
-      reverbWet: 0.15,
-      volume: 0.65,
-      polyphonic: true,
-      octaveOffset: 0,
-      unisonVoices: 1,
-      unisonDetune: 0,
-      voiceBoxEnabled: false,
-      voiceBoxVowel: 'E' as const,
-      voiceBoxModRate: 3.5,
-      voiceBoxModDepth: 0.4,
-    }
-  },
-  {
-    id: 'sub_bass',
-    name: 'Sub Bass',
-    settings: {
-      preset: 'sub_bass',
-      waveType: 'sine' as WaveType,
-      attack: 0.02,
-      decay: 0.25,
-      sustain: 0.5,
-      release: 0.15,
-      filterCutoff: 350,
-      filterResonance: 4.0,
-      distortion: 0.45,
-      delayTime: 0.1,
-      delayFeedback: 0.0,
-      reverbWet: 0.05,
-      volume: 0.9,
-      polyphonic: false,
-      octaveOffset: -1,
-      unisonVoices: 1,
-      unisonDetune: 0,
-      voiceBoxEnabled: false,
-      voiceBoxVowel: 'A' as const,
-      voiceBoxModRate: 1.0,
-      voiceBoxModDepth: 0.3,
-    }
-  },
-  {
-    id: 'acoustic_steel',
-    name: 'Steel Guitar',
-    settings: {
-      preset: 'acoustic_steel',
-      waveType: 'triangle' as WaveType,
-      attack: 0.002,
-      decay: 0.4,
-      sustain: 0.2,
-      release: 0.3,
-      filterCutoff: 5500,
-      filterResonance: 1.5,
-      distortion: 0.0,
-      delayTime: 0.15,
-      delayFeedback: 0.1,
-      reverbWet: 0.25,
-      volume: 0.8,
-      polyphonic: true,
-      octaveOffset: 0,
-      unisonVoices: 1,
-      unisonDetune: 0,
-      voiceBoxEnabled: false,
-      voiceBoxVowel: 'I' as const,
-      voiceBoxModRate: 2.0,
-      voiceBoxModDepth: 0.5,
-    }
-  }
-];
+import { PitchData, ActiveNote, MidiLogMessage, SynthSettings } from './types';
+import { PolySynth } from './utils/synthEngine';
+import { MidiManager } from './utils/midiManager';
+import { autoCorrelate, midiToFrequency } from './utils/pitchDetector';
 
-// Tunings database
-const TUNINGS: Tuning[] = [
-  {
-    name: "Standard E",
-    notes: ["E4", "B3", "G3", "D3", "A2", "E2"],
-    midiNumbers: [64, 59, 55, 50, 45, 40]
-  },
-  {
-    name: "Drop D",
-    notes: ["E4", "B3", "G3", "D3", "A2", "D2"],
-    midiNumbers: [64, 59, 55, 50, 45, 38]
-  },
-  {
-    name: "DADGAD",
-    notes: ["D4", "A3", "G3", "D3", "A2", "D2"],
-    midiNumbers: [62, 57, 55, 50, 45, 38]
-  },
-  {
-    name: "Open G",
-    notes: ["D4", "B3", "G3", "D3", "G2", "D2"],
-    midiNumbers: [62, 59, 55, 50, 43, 38]
-  }
-];
+import { TunerDial } from './components/TunerDial';
+import { GuitarFretboard } from './components/GuitarFretboard';
+import { VirtualKeyboard } from './components/VirtualKeyboard';
+import { SynthPanel } from './components/SynthPanel';
+import { MidiConsole } from './components/MidiConsole';
+import { DrumBeats } from './components/DrumBeats';
 
-// Interactive tutorials
-interface ScaleTutorial {
-  name: string;
-  notes: { name: string; midi: number }[];
-  description: string;
-}
-
-const SCALE_TUTORIALS: ScaleTutorial[] = [
-  {
-    name: "A Minor Pentatonic (Blues)",
-    notes: [
-      { name: "A2", midi: 45 },
-      { name: "C3", midi: 48 },
-      { name: "D3", midi: 50 },
-      { name: "E3", midi: 52 },
-      { name: "G3", midi: 55 },
-      { name: "A3", midi: 57 }
-    ],
-    description: "The most famous guitar scale of all time. Essential for rock, blues, and heavy metal solos."
-  },
-  {
-    name: "E Natural Minor",
-    notes: [
-      { name: "E2", midi: 40 },
-      { name: "F#2", midi: 42 },
-      { name: "G2", midi: 43 },
-      { name: "A2", midi: 45 },
-      { name: "B2", midi: 47 },
-      { name: "C3", midi: 48 },
-      { name: "D3", midi: 50 },
-      { name: "E3", midi: 52 }
-    ],
-    description: "A dark, classical sound, popular in progressive metal and acoustic ballad styles."
-  },
-  {
-    name: "C Major Scale",
-    notes: [
-      { name: "C3", midi: 48 },
-      { name: "D3", midi: 50 },
-      { name: "E3", midi: 52 },
-      { name: "F3", midi: 53 },
-      { name: "G3", midi: 55 },
-      { name: "A3", midi: 57 },
-      { name: "B3", midi: 59 },
-      { name: "C4", midi: 60 }
-    ],
-    description: "The fundamental scale of Western music. Essential for chord structures and melodies."
-  }
-];
+const DEFAULT_SETTINGS: SynthSettings = {
+  oscType: 'sawtooth',
+  cutoff: 3000,
+  Q: 2.0,
+  attack: 0.005,
+  decay: 0.15,
+  sustain: 0.6,
+  release: 0.1,
+  volume: 0.5,
+  glide: 0.0,
+  latencyLevel: 'ultra-low',
+  audioPolyphonyEnabled: true,
+  audioPolyphonyDecay: 0.8,
+  delayEnabled: false,
+  delayTime: 0.25,
+  delayFeedback: 0.3,
+  delayWet: 0.15,
+  noiseGate: -35
+};
 
 export default function App() {
-  // Main states
-  const [listening, setListening] = useState<boolean>(false);
+  const [micConnected, setMicConnected] = useState(false);
   const [pitchData, setPitchData] = useState<PitchData | null>(null);
-  const [tuning, setTuning] = useState<Tuning>(TUNINGS[0]);
-  const [noiseThreshold, setNoiseThreshold] = useState<number>(0.015);
-  const [activeSynthNotes, setActiveSynthNotes] = useState<Set<number>>(new Set());
-  
-  // Synth and MIDI Settings
-  const [synthSettings, setSynthSettings] = useState<SynthSettings>(INSTRUMENT_PRESETS[0].settings as SynthSettings);
-  const [midiLogs, setMidiLogs] = useState<MidiMessageLog[]>([]);
-  const [midiOutputs, setMidiOutputs] = useState<MidiOutput[]>([]);
-  const [selectedOutputId, setSelectedOutputId] = useState<string | null>(null);
+  const [activeNotes, setActiveNotes] = useState<ActiveNote[]>([]);
+  const [logs, setLogs] = useState<MidiLogMessage[]>([]);
+  const [midiOutputs, setMidiOutputs] = useState<any[]>([]);
+  const [selectedOutputId, setSelectedOutputId] = useState<string>('');
+  const [synthSettings, setSynthSettings] = useState<SynthSettings>(DEFAULT_SETTINGS);
+  const [showTutorial, setShowTutorial] = useState(true);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
 
-  // Training / Tutorial state
-  const [activeTutorial, setActiveTutorial] = useState<ScaleTutorial | null>(null);
-  const [tutorialIndex, setTutorialIndex] = useState<number>(0);
-  const [tutorialSuccess, setTutorialSuccess] = useState<boolean>(false);
-
-  // Audio system refs
+  // Audio refs
   const audioContextRef = useRef<AudioContext | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const animationFrameIdRef = useRef<number | null>(null);
-  const bufferLengthRef = useRef<number>(2048);
-  const dataArrayRef = useRef<Float32Array>(new Float32Array(0));
+  const animationFrameRef = useRef<number | null>(null);
 
-  // Synthesizer and MIDI integration engines refs
-  const synthEngineRef = useRef<SynthEngine | null>(null);
+  // Synth & MIDI engine refs (lazy-loaded or instantiated on mount)
+  const synthRef = useRef<PolySynth>(new PolySynth(DEFAULT_SETTINGS));
   const midiManagerRef = useRef<MidiManager | null>(null);
+  const currentAudioNoteRef = useRef<number | null>(null);
+  const activeAudioNotesRef = useRef<Map<number, { lastSeen: number; startTime: number; frequency: number }>>(new Map());
 
-  // Tracker logic references (to bypass React state latency inside the audio animation loop)
-  const lastMidiNoteRef = useRef<number>(-1);
-  const consecutiveActiveFramesRef = useRef<number>(0);
-  const consecutiveQuietFramesRef = useRef<number>(0);
-  const activeSynthNotesRef = useRef<Set<number>>(new Set());
-  const synthSettingsRef = useRef<SynthSettings>(synthSettings);
-  const isListeningRef = useRef<boolean>(false);
-  const noiseThresholdRef = useRef<number>(noiseThreshold);
-
-  // Update refs when states change to keep loop parameters synchronous
+  // Reset audio polyphony tracking when mode changes
   useEffect(() => {
-    synthSettingsRef.current = synthSettings;
-    if (synthEngineRef.current) {
-      synthEngineRef.current.updateSettings(synthSettings);
+    if (!synthSettings.audioPolyphonyEnabled) {
+      activeAudioNotesRef.current.forEach((_, activeNote) => {
+        synthRef.current.noteOff(activeNote);
+        midiManagerRef.current?.sendNoteOff(activeNote);
+      });
+      activeAudioNotesRef.current.clear();
+      setActiveNotes((prev) => prev.filter((n) => n.source !== 'audio'));
     }
-  }, [synthSettings]);
+  }, [synthSettings.audioPolyphonyEnabled]);
 
+  // Load initial device list and watch for plug/unplug changes (e.g. Guitar Link)
   useEffect(() => {
-    noiseThresholdRef.current = noiseThreshold;
-  }, [noiseThreshold]);
+    const queryDevices = async () => {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        console.warn('navigator.mediaDevices is not supported in this browser environment');
+        return;
+      }
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter((device) => device.kind === 'audioinput');
+        setAudioDevices(audioInputs);
+      } catch (e) {
+        console.error('Initial device query failed:', e);
+      }
+    };
+    queryDevices();
+    
+    // Listen for device changes (e.g. plugging/unplugging USB audio interface)
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', queryDevices);
+      return () => {
+        navigator.mediaDevices.removeEventListener('devicechange', queryDevices);
+      };
+    }
+    return;
+  }, []);
 
-  // Handle first gesture Web Audio initiation and MIDI setup
+  // Initialize MIDI and custom synthesizers
   useEffect(() => {
-    // Create Engines
-    synthEngineRef.current = new SynthEngine(synthSettings);
+    // Instantiate MIDI manager
     midiManagerRef.current = new MidiManager();
     
-    // Request MIDI interface access
-    midiManagerRef.current.requestAccess((outputs) => {
-      setMidiOutputs(outputs);
-      if (outputs.length > 0) {
-        setSelectedOutputId(outputs[0].id);
-      }
+    // Wire logs
+    midiManagerRef.current.registerLogCallback((msg) => {
+      setLogs((prev) => [...prev, msg].slice(-100));
     });
 
+    // Populate MIDI outputs
+    const timer = setTimeout(() => {
+      if (midiManagerRef.current) {
+        const outs = midiManagerRef.current.getOutputs();
+        setMidiOutputs(outs);
+        if (outs.length > 0) {
+          setSelectedOutputId(outs[0].id);
+        }
+      }
+    }, 1000);
+
     return () => {
-      stopListening();
-      if (synthEngineRef.current) {
-        synthEngineRef.current.allNotesOff();
+      clearTimeout(timer);
+      synthRef.current.panic();
+      if (midiManagerRef.current) {
+        midiManagerRef.current.clearAll();
       }
     };
   }, []);
 
-  const addMidiLog = (type: 'Note On' | 'Note Off' | 'Pitch Bend', note: number | undefined, value: number) => {
-    let noteName: string | undefined;
-    if (note !== undefined) {
-      const names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-      const octave = Math.floor(note / 12) - 1;
-      noteName = `${names[note % 12]}${octave}`;
+  // Track Synth Settings
+  useEffect(() => {
+    synthRef.current.updateSettings(synthSettings);
+  }, [synthSettings]);
+
+  // Automatically hot-restart mic streaming when Latency Mode is changed
+  useEffect(() => {
+    if (micConnected) {
+      startMicCapture(selectedDeviceId);
     }
+  }, [synthSettings.latencyLevel]);
 
-    const log: MidiMessageLog = {
-      id: Math.random().toString(),
-      type,
-      channel: 1,
-      note,
-      noteName,
-      value,
-      timestamp: new Date().toTimeString().split(' ')[0],
-    };
-
-    setMidiLogs((prev) => [log, ...prev.slice(0, 49)]); // Keep last 50 logs
-
-    // Scroll console down if user scrolled away
-    const scrollDiv = document.getElementById('midi-logs-scroll');
-    if (scrollDiv) {
-      scrollDiv.scrollTop = 0;
-    }
-  };
-
-  const handleSelectMidiOutput = (deviceId: string) => {
-    setSelectedOutputId(deviceId);
-    if (midiManagerRef.current) {
-      midiManagerRef.current.selectOutput(deviceId);
-    }
-  };
-
-  // Turn on a synth note manually (from mouse, virtual piano, or fretboard tap)
-  const handleManualNoteOn = (midiNote: number) => {
-    if (!audioContextRef.current) {
-      initializeAudioContext();
-    }
-    
-    // Update active set
-    setActiveSynthNotes((prev) => {
-      const next = new Set(prev);
-      next.add(midiNote);
-      activeSynthNotesRef.current = next;
-      return next;
-    });
-
-    // Play note via virtual synth
-    if (synthEngineRef.current) {
-      synthEngineRef.current.noteOn(midiNote, 0.85);
-    }
-
-    // Play note via Web MIDI Out
-    if (midiManagerRef.current) {
-      midiManagerRef.current.sendNoteOn(midiNote, 0.85);
-    }
-
-    addMidiLog('Note On', midiNote, 85);
-    checkTutorialNote(midiNote);
-  };
-
-  // Turn off a synth note manually
-  const handleManualNoteOff = (midiNote: number) => {
-    setActiveSynthNotes((prev) => {
-      const next = new Set(prev);
-      next.delete(midiNote);
-      activeSynthNotesRef.current = next;
-      return next;
-    });
-
-    if (synthEngineRef.current) {
-      synthEngineRef.current.noteOff(midiNote);
-    }
-
-    if (midiManagerRef.current) {
-      midiManagerRef.current.sendNoteOff(midiNote);
-    }
-
-    addMidiLog('Note Off', midiNote, 0);
-  };
-
-  // Initialize and unlock Audio Context
-  const initializeAudioContext = (): AudioContext => {
-    if (!audioContextRef.current) {
-      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
-      const ctx = new AudioCtxClass({ latencyHint: 'interactive' });
-      audioContextRef.current = ctx;
-      if (synthEngineRef.current) {
-        synthEngineRef.current.init(ctx);
-      }
-    }
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
-    return audioContextRef.current;
-  };
-
-  const startListening = async () => {
+  // Audio Input Capture Loop
+  const startMicCapture = async (deviceIdToUse?: string) => {
+    const activeDeviceId = deviceIdToUse || selectedDeviceId;
     try {
-      const ctx = initializeAudioContext();
-      
-      const stream = await navigator.mediaDevices.getUserMedia({
+      // Resume or create audio context with explicit low latency hint
+      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioCtxClass({
+          latencyHint: 'interactive'
+        });
+      }
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
+
+      // Sync active audio engines
+      synthRef.current.resumeContext();
+
+      // Clean up previous stream if any
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach((track) => track.stop());
+      }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Audio input capturing (getUserMedia) is not supported or accessible in this browser/environment. Please make sure you are using HTTPS and that browser permissions are granted.');
+      }
+
+      // Access stream with requested device ID constraints if specified
+      const constraints: MediaStreamConstraints = {
         audio: {
           echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false,
-          latency: 0.003 // request minimum possible latency
-        } as any
-      });
+          ...(activeDeviceId ? { deviceId: { exact: activeDeviceId } } : {}),
+        },
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
-      mediaStreamRef.current = stream;
-      const source = ctx.createMediaStreamSource(stream);
+      micStreamRef.current = stream;
 
-      // CRITICAL PRE-FILTERING FOR GUITARS:
-      // A bandpass/lowpass filter at 800Hz dampens string harmonics/noise
-      // allowing the fundamental pitch detector to be 5x more stable.
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.value = 1000; // Pass fundamentals up to ~E5/E6, cut overtones
-
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 2048;
+      const source = audioContextRef.current.createMediaStreamSource(stream);
+      const analyser = audioContextRef.current.createAnalyser();
       
-      // Routing: mic stream -> lowpass -> FFT Analyser
-      source.connect(filter);
-      filter.connect(analyser);
-
+      // Determine FFT Size (buffer window) dynamically based on selected latencyLevel
+      let fftSize = 2048;
+      if (synthSettings.latencyLevel === 'ultra-low') {
+        fftSize = 512;  // Ultra snappy tracking with a tiny buffer window for Android 15
+      } else if (synthSettings.latencyLevel === 'low') {
+        fftSize = 1024; // Extremely snappy tracking for standard Android
+      } else if (synthSettings.latencyLevel === 'high') {
+        fftSize = 4096; // Ultimate frequency resolution for deep bass strings
+      }
+      analyser.fftSize = fftSize;
+      
+      source.connect(analyser);
       analyserRef.current = analyser;
-      bufferLengthRef.current = analyser.fftSize;
-      dataArrayRef.current = new Float32Array(analyser.fftSize);
+      setMicConnected(true);
 
-      setListening(true);
-      isListeningRef.current = true;
-      
-      // Start real-time analysis loop
-      runAudioLoop();
-    } catch (err) {
-      console.error("Could not activate microphone stream:", err);
-      alert("Error: Microphone access is required for real-time Guitar to MIDI conversion. Please allow microphone permission in the frame.");
-    }
-  };
-
-  const stopListening = () => {
-    setListening(false);
-    isListeningRef.current = false;
-    setPitchData(null);
-
-    if (animationFrameIdRef.current) {
-      cancelAnimationFrame(animationFrameIdRef.current);
-      animationFrameIdRef.current = null;
-    }
-
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach(track => track.stop());
-      mediaStreamRef.current = null;
-    }
-
-    // Release any lingering note-on signals
-    if (lastMidiNoteRef.current !== -1) {
-      if (synthEngineRef.current) {
-        synthEngineRef.current.noteOff(lastMidiNoteRef.current);
-      }
-      if (midiManagerRef.current) {
-        midiManagerRef.current.sendNoteOff(lastMidiNoteRef.current);
-      }
-      lastMidiNoteRef.current = -1;
-    }
-
-    setActiveSynthNotes(new Set());
-    activeSynthNotesRef.current = new Set();
-  };
-
-  // High performance real-time pitch tracking loop (60 frames per second)
-  const runAudioLoop = () => {
-    if (!analyserRef.current || !isListeningRef.current || !audioContextRef.current) return;
-
-    const analyser = analyserRef.current;
-    const buffer = dataArrayRef.current;
-    const sampleRate = audioContextRef.current.sampleRate;
-
-    // Read audio data in the time domain
-    analyser.getFloatTimeDomainData(buffer);
-
-    // Run autocorrelation pitch estimation
-    const { frequency, confidence } = autoCorrelate(buffer, sampleRate);
-
-    // Calculate overall audio envelope amplitude (Volume)
-    let sumSquares = 0;
-    for (let i = 0; i < buffer.length; i++) {
-      sumSquares += buffer[i] * buffer[i];
-    }
-    const amplitude = Math.sqrt(sumSquares / buffer.length);
-
-    // Pitch evaluation
-    if (frequency > 0 && confidence > 0.65 && amplitude > noiseThresholdRef.current) {
-      const { midiNote, noteName, centsOffset } = frequencyToMidi(frequency);
-
-      // Filter crazy pitches out of typical guitar register (MIDI 36 - Low C1 to MIDI 96 - High C6)
-      if (midiNote >= 36 && midiNote <= 96) {
+      // Now that permission is granted, enumerate devices to get the actual names/labels
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter((device) => device.kind === 'audioinput');
+        setAudioDevices(audioInputs);
         
-        // Hysteresis frame-lock lock-in:
-        // Ensure pitch is held for at least 2 consecutive frames to avoid transient glitches
-        if (midiNote === lastMidiNoteRef.current) {
-          consecutiveActiveFramesRef.current++;
-          consecutiveQuietFramesRef.current = 0;
-
-          // If the note is stable and locked, perform expressive string pitch bend!
-          if (consecutiveActiveFramesRef.current > 1) {
-            // Apply real-time bend to the synthesizer oscillator
-            if (synthEngineRef.current) {
-              synthEngineRef.current.pitchBend(midiNote, centsOffset);
-            }
-            // Send pitch bend MIDI output message
-            if (midiManagerRef.current) {
-              midiManagerRef.current.sendPitchBend(centsOffset);
-            }
+        // Sync selected device state if it's currently empty
+        if (!selectedDeviceId && audioInputs.length > 0) {
+          const activeTrack = stream.getAudioTracks()[0];
+          const activeLabel = activeTrack?.label;
+          const matchingDevice = audioInputs.find(d => d.label === activeLabel);
+          if (matchingDevice) {
+            setSelectedDeviceId(matchingDevice.deviceId);
+          } else {
+            setSelectedDeviceId(audioInputs[0].deviceId);
           }
+        }
+      } catch (e) {
+        console.error('Error enumerating devices after access:', e);
+      }
+
+      const buffer = new Float32Array(analyser.fftSize);
+      const historyBuffer = new Float32Array(2048);
+
+      // Pitch detection animation frame loop
+      const detectLoop = () => {
+        if (!analyserRef.current) return;
+        
+        analyserRef.current.getFloatTimeDomainData(buffer);
+        
+        // Slide history buffer and copy new samples from `buffer`
+        if (buffer.length >= historyBuffer.length) {
+          historyBuffer.set(buffer.subarray(buffer.length - historyBuffer.length));
         } else {
-          // If a new note is detected, count up to ensure stability
-          consecutiveActiveFramesRef.current = 1;
-          consecutiveQuietFramesRef.current = 0;
+          historyBuffer.set(historyBuffer.subarray(buffer.length), 0);
+          historyBuffer.set(buffer, historyBuffer.length - buffer.length);
+        }
+        
+        // 1. Calculate buffer signal power (dB) to detect silence / hand-mute instantly on latest input
+        let sumSquares = 0;
+        for (let i = 0; i < buffer.length; i++) {
+          sumSquares += buffer[i] * buffer[i];
+        }
+        const rms = Math.sqrt(sumSquares / buffer.length);
+        const db = 20 * Math.log10(rms || 1e-5);
+        const gateThreshold = synthSettings.noiseGate !== undefined ? synthSettings.noiseGate : -35;
 
-          // Note transition: Release previous note and trigger new note!
-          if (lastMidiNoteRef.current !== -1) {
-            const oldNote = lastMidiNoteRef.current;
-            
-            // Release old note in synth and MIDI
-            if (synthEngineRef.current) {
-              synthEngineRef.current.noteOff(oldNote);
-            }
-            if (midiManagerRef.current) {
-              midiManagerRef.current.sendNoteOff(oldNote);
-            }
-            addMidiLog('Note Off', oldNote, 0);
-          }
-
-          // Trigger new note immediately
-          const velocityPercent = Math.round(Math.min(100, (amplitude * 6) * 100));
-          if (synthEngineRef.current) {
-            synthEngineRef.current.noteOn(midiNote, amplitude * 6);
-          }
-          if (midiManagerRef.current) {
-            midiManagerRef.current.sendNoteOn(midiNote, amplitude * 6);
-          }
-          addMidiLog('Note On', midiNote, velocityPercent);
+        // If the signal is too quiet (below the user's noise gate threshold), mute instantly
+        if (db < gateThreshold) {
+          setPitchData(null);
           
-          // Trigger tutorial checking
-          checkTutorialNote(midiNote);
+          if (synthSettings.audioPolyphonyEnabled) {
+            activeAudioNotesRef.current.forEach((_, activeNote) => {
+              synthRef.current.noteOff(activeNote);
+              midiManagerRef.current?.sendNoteOff(activeNote);
+            });
+            activeAudioNotesRef.current.clear();
+            setActiveNotes((prev) => prev.filter((n) => n.source !== 'audio'));
+          } else {
+            if (currentAudioNoteRef.current !== null) {
+              synthRef.current.noteOff(currentAudioNoteRef.current);
+              midiManagerRef.current?.sendNoteOff(currentAudioNoteRef.current);
+              setActiveNotes((prev) => prev.filter((n) => n.source !== 'audio'));
+              currentAudioNoteRef.current = null;
+            }
+          }
+          
+          animationFrameRef.current = requestAnimationFrame(detectLoop);
+          return;
+        }
+        
+        // Dynamically adjust autocorrelation clarity confidence threshold based on latency selection
+        // ultra-low: 0.82, low: 0.85, balanced/high: 0.9 / 0.92
+        const clarityThreshold = 
+          synthSettings.latencyLevel === 'ultra-low' ? 0.82 :
+          synthSettings.latencyLevel === 'low' ? 0.85 : 
+          synthSettings.latencyLevel === 'high' ? 0.92 : 0.9;
+        
+        // We handle the noise gate check above, so pass a safe low threshold to autoCorrelate to prevent double-gating
+        const result = autoCorrelate(historyBuffer, audioContextRef.current!.sampleRate, -100, clarityThreshold);
 
-          // Update active tracking indicators
-          setActiveSynthNotes(() => {
-            const next = new Set<number>();
-            next.add(midiNote);
-            activeSynthNotesRef.current = next;
-            return next;
+        // Filter out extreme high-pitch squeaks/noise and sub-bass rumble (limit to safe MIDI note range [24, 96])
+        const isPitchValid = result && result.midiNote >= 24 && result.midiNote <= 96;
+
+        if (synthSettings.audioPolyphonyEnabled) {
+          // --- Poly-Strum String Resonance Mode ---
+          if (isPitchValid && result) {
+            setPitchData(result);
+            const note = result.midiNote;
+
+            if (!activeAudioNotesRef.current.has(note)) {
+              // Cap at 6 active voices (matching 6 guitar strings) to avoid overlap mud
+              if (activeAudioNotesRef.current.size >= 6) {
+                // Find oldest note to release
+                let oldestNote = -1;
+                let oldestTime = Infinity;
+                activeAudioNotesRef.current.forEach((data, n) => {
+                  if (data.startTime < oldestTime) {
+                    oldestTime = data.startTime;
+                    oldestNote = n;
+                  }
+                });
+                if (oldestNote !== -1) {
+                  synthRef.current.noteOff(oldestNote);
+                  midiManagerRef.current?.sendNoteOff(oldestNote);
+                  activeAudioNotesRef.current.delete(oldestNote);
+                }
+              }
+
+              synthRef.current.noteOn(note, 100);
+              midiManagerRef.current?.sendNoteOn(note, 100);
+              activeAudioNotesRef.current.set(note, {
+                lastSeen: Date.now(),
+                startTime: Date.now(),
+                frequency: result.frequency,
+              });
+            } else {
+              // Note is already active, keep it ringing by updating lastSeen
+              const existing = activeAudioNotesRef.current.get(note)!;
+              existing.lastSeen = Date.now();
+              // Apply real-time microtonal pitch bends
+              midiManagerRef.current?.sendPitchBend(result.centsDeviation);
+              synthRef.current.updateVoicePitch(note, result.centsDeviation);
+            }
+          } else {
+            setPitchData(null);
+          }
+
+          // Scan and turn off notes that have exceeded the decay time
+          const nowMs = Date.now();
+          const decayMs = (synthSettings.audioPolyphonyDecay || 1.5) * 1000;
+          activeAudioNotesRef.current.forEach((data, activeNote) => {
+            if (nowMs - data.lastSeen > decayMs) {
+              synthRef.current.noteOff(activeNote);
+              midiManagerRef.current?.sendNoteOff(activeNote);
+              activeAudioNotesRef.current.delete(activeNote);
+            }
           });
 
-          lastMidiNoteRef.current = midiNote;
+          // Sync activeNotes React state for fretboard/keyboard visualization
+          const currentList: ActiveNote[] = [];
+          activeAudioNotesRef.current.forEach((data, activeNote) => {
+            currentList.push({
+              note: activeNote,
+              frequency: data.frequency,
+              startTime: data.startTime,
+              source: 'audio',
+            });
+          });
+          setActiveNotes((prev) => [
+            ...prev.filter((n) => n.source !== 'audio'),
+            ...currentList,
+          ]);
+
+        } else {
+          // --- Standard Monophonic Mode ---
+          if (isPitchValid && result) {
+            setPitchData(result);
+            const note = result.midiNote;
+
+            if (currentAudioNoteRef.current !== note) {
+              const oldNote = currentAudioNoteRef.current;
+              // Check if the old voice actually exists in the synth to prevent stuck notes
+              if (synthSettings.glide > 0 && oldNote !== null && synthRef.current.hasVoice(oldNote)) {
+                // Smooth Glide / Portamento transition
+                synthRef.current.glideVoice(oldNote, note, synthSettings.glide);
+                synthRef.current.renameVoice(oldNote, note);
+                midiManagerRef.current?.sendPitchBend(0);
+                midiManagerRef.current?.sendNoteOff(oldNote);
+                midiManagerRef.current?.sendNoteOn(note, 100);
+
+                setActiveNotes((prev) => [
+                  ...prev.filter((n) => n.source !== 'audio'),
+                  {
+                    note,
+                    frequency: result.frequency,
+                    startTime: Date.now(),
+                    source: 'audio',
+                  },
+                ]);
+                currentAudioNoteRef.current = note;
+              } else {
+                // Standard hard strike cutoff
+                if (oldNote !== null) {
+                  synthRef.current.noteOff(oldNote);
+                  midiManagerRef.current?.sendNoteOff(oldNote);
+                }
+                synthRef.current.noteOn(note, 100);
+                midiManagerRef.current?.sendNoteOn(note, 100);
+                setActiveNotes((prev) => [
+                  ...prev.filter((n) => n.source !== 'audio'),
+                  {
+                    note,
+                    frequency: result.frequency,
+                    startTime: Date.now(),
+                    source: 'audio',
+                  },
+                ]);
+                currentAudioNoteRef.current = note;
+              }
+            } else {
+              // Pitch Bend adjustments for fine tuning/vibrato expression
+              midiManagerRef.current?.sendPitchBend(result.centsDeviation);
+              // Update physical oscillators in real time with cents deviation
+              synthRef.current.updateVoicePitch(note, result.centsDeviation);
+            }
+          } else {
+            setPitchData(null);
+            // Release notes if signal cuts out
+            if (currentAudioNoteRef.current !== null) {
+              synthRef.current.noteOff(currentAudioNoteRef.current);
+              midiManagerRef.current?.sendNoteOff(currentAudioNoteRef.current);
+              setActiveNotes((prev) => prev.filter((n) => n.source !== 'audio'));
+              currentAudioNoteRef.current = null;
+            }
+          }
         }
 
-        // Update visual pitch metadata for the Tuner display
-        setPitchData({
-          frequency,
-          noteName,
-          midiNote,
-          centsOffset,
-          confidence,
-          amplitude
-        });
-      }
+        animationFrameRef.current = requestAnimationFrame(detectLoop);
+      };
+
+      // Start loop
+      animationFrameRef.current = requestAnimationFrame(detectLoop);
+    } catch (err) {
+      console.error('Failed to get mic stream:', err);
+      alert('Failed to connect microphone/instrument. Please check browser permissions and verify that your audio interface is plugged in.');
+    }
+  };
+
+  const stopMicCapture = () => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach((track) => track.stop());
+      micStreamRef.current = null;
+    }
+
+    analyserRef.current = null;
+    setMicConnected(false);
+    setPitchData(null);
+
+    // Release any lingering audio notes
+    if (currentAudioNoteRef.current !== null) {
+      synthRef.current.noteOff(currentAudioNoteRef.current);
+      midiManagerRef.current?.sendNoteOff(currentAudioNoteRef.current);
+      currentAudioNoteRef.current = null;
+    }
+
+    activeAudioNotesRef.current.forEach((_, activeNote) => {
+      synthRef.current.noteOff(activeNote);
+      midiManagerRef.current?.sendNoteOff(activeNote);
+    });
+    activeAudioNotesRef.current.clear();
+
+    setActiveNotes((prev) => prev.filter((n) => n.source !== 'audio'));
+  };
+
+  const toggleMic = () => {
+    if (micConnected) {
+      stopMicCapture();
     } else {
-      // Silence threshold handling (Refractory gate)
-      consecutiveQuietFramesRef.current++;
-      
-      // If we see quiet frames for 4 consecutive intervals (~70ms), turn note OFF
-      if (consecutiveQuietFramesRef.current > 4 && lastMidiNoteRef.current !== -1) {
-        const releasedNote = lastMidiNoteRef.current;
-        
-        if (synthEngineRef.current) {
-          synthEngineRef.current.noteOff(releasedNote);
-        }
-        if (midiManagerRef.current) {
-          midiManagerRef.current.sendNoteOff(releasedNote);
-        }
-        addMidiLog('Note Off', releasedNote, 0);
-
-        setActiveSynthNotes(new Set());
-        activeSynthNotesRef.current = new Set();
-        lastMidiNoteRef.current = -1;
-        consecutiveActiveFramesRef.current = 0;
-      }
-
-      // Slightly update visual tuner info to indicate signal is decaying but don't clear note name instantly
-      setPitchData((prev) => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          amplitude,
-          confidence: Math.max(0, prev.confidence - 0.1) // decay confidence visuals
-        };
-      });
+      startMicCapture();
     }
-
-    // Schedule next animation frame
-    animationFrameIdRef.current = requestAnimationFrame(runAudioLoop);
   };
 
-  // Metronome play reference tuner string note
-  const handlePlayReferenceNote = (noteName: string, midiNote: number) => {
-    handleManualNoteOn(midiNote);
+  // Keyboard/Fretboard manual trigger notes
+  const handleNoteOn = (note: number, velocity = 100) => {
+    synthRef.current.resumeContext();
+    synthRef.current.noteOn(note, velocity);
+    midiManagerRef.current?.sendNoteOn(note, velocity);
+
+    setActiveNotes((prev) => [
+      ...prev.filter((n) => n.note !== note),
+      {
+        note,
+        frequency: midiToFrequency(note),
+        startTime: Date.now(),
+        source: 'keyboard',
+      },
+    ]);
+  };
+
+  const handleNoteOff = (note: number) => {
+    synthRef.current.noteOff(note);
+    midiManagerRef.current?.sendNoteOff(note);
+    setActiveNotes((prev) => prev.filter((n) => n.note !== note));
+  };
+
+  // Reference note trigger helper
+  const playReferenceNote = (note: number) => {
+    synthRef.current.resumeContext();
+    synthRef.current.noteOn(note, 100);
     setTimeout(() => {
-      handleManualNoteOff(midiNote);
-    }, 450);
+      synthRef.current.noteOff(note);
+    }, 1200);
   };
 
-  // Tutorial / scale practice handler
-  const startTutorial = (tutorial: ScaleTutorial) => {
-    setActiveTutorial(tutorial);
-    setTutorialIndex(0);
-    setTutorialSuccess(false);
-  };
-
-  const stopTutorial = () => {
-    setActiveTutorial(null);
-    setTutorialIndex(0);
-    setTutorialSuccess(false);
-  };
-
-  const checkTutorialNote = (midi: number) => {
-    if (!activeTutorial) return;
-    
-    const target = activeTutorial.notes[tutorialIndex];
-    // Allow matching note name ignoring octave for loose/easier string tuning matching
-    const names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-    const playedName = names[midi % 12];
-    const targetName = target.name.replace(/\d/, '');
-
-    if (playedName === targetName || midi === target.midi) {
-      // Correct note played!
-      if (tutorialIndex === activeTutorial.notes.length - 1) {
-        setTutorialSuccess(true);
-      } else {
-        setTutorialIndex(prev => prev + 1);
-      }
-    }
+  // Select alternative MIDI output hardware ports
+  const handleSelectOutput = (id: string) => {
+    setSelectedOutputId(id);
+    midiManagerRef.current?.selectOutput(id);
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans select-none pb-12">
-      {/* Header Bar */}
-      <header className="bg-zinc-900 border-b border-zinc-800 py-4 px-6 md:px-12 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4">
-          
-          {/* Logo Brand */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center border border-indigo-400 shadow-[0_0_12px_rgba(99,102,241,0.4)]">
-              <Music className="w-5 h-5 text-white animate-pulse" />
-            </div>
-            <div>
-              <h1 className="font-display font-bold text-lg tracking-tight bg-gradient-to-r from-zinc-100 to-zinc-400 bg-clip-text text-transparent">
-                Guitar Audio-to-MIDI Synth
-              </h1>
-              <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
-                Real-time pitch to MIDI converter
-              </p>
-            </div>
+    <div className="min-h-screen bg-black text-neutral-100 flex flex-col font-sans selection:bg-indigo-500/30">
+      
+      {/* Header bar */}
+      <header className="border-b border-neutral-900 bg-neutral-950/80 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-50">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-rose-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+            <Guitar className="w-5.5 h-5.5 text-white animate-pulse" />
           </div>
-
-          {/* Core Listen Trigger Button */}
-          <div className="flex items-center gap-3 w-full sm:w-auto">
-            {/* Listening State Indicator */}
-            {listening && (
-              <span className="hidden sm:inline-flex items-center gap-1.5 text-xs text-emerald-400 font-mono animate-pulse">
-                <span className="w-2 h-2 rounded-full bg-emerald-400"></span> Live Processing
+          <div>
+            <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-2">
+              HexaMIDI Studio
+              <span className="text-[10px] font-mono bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-full uppercase tracking-widest font-normal">
+                v2.1
               </span>
-            )}
-            
-            <button
-              onClick={listening ? stopListening : startListening}
-              className={`w-full sm:w-auto py-3 px-6 rounded-2xl font-semibold text-sm transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 border shadow-lg ${
-                listening
-                  ? 'bg-rose-600 hover:bg-rose-500 border-rose-500 shadow-[0_0_15px_rgba(239,68,68,0.25)] text-white'
-                  : 'bg-indigo-600 hover:bg-indigo-500 border-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.25)] text-white'
-              }`}
-              id="main-listening-toggle"
-            >
-              {listening ? (
-                <>
-                  <Square className="w-4 h-4 fill-white" /> Stop Audio Engine
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4 fill-white ml-0.5" /> Connect Guitar (Mic)
-                </>
-              )}
-            </button>
+            </h1>
+            <p className="text-xs text-neutral-500 font-medium">Guitar Audio-to-MIDI Interface & Tuner</p>
           </div>
+        </div>
+
+        {/* Top Controls */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          {/* Audio Input Device Selector */}
+          {audioDevices.length > 0 && (
+            <div className="flex items-center gap-2">
+              <select
+                id="audio-input-select"
+                value={selectedDeviceId}
+                onChange={(e) => {
+                  const newId = e.target.value;
+                  setSelectedDeviceId(newId);
+                  if (micConnected) {
+                    // Hot-restart input streaming with the newly selected device
+                    startMicCapture(newId);
+                  }
+                }}
+                className="bg-neutral-900 border border-neutral-800 text-neutral-100 text-xs rounded-xl px-3 py-2.5 focus:ring-1 focus:ring-indigo-500 focus:outline-none max-w-[200px] sm:max-w-[260px] truncate font-medium cursor-pointer transition hover:border-neutral-700"
+                title="Select Audio Input Device (e.g. Guitar Link, USB Microphone, Built-in Mic)"
+              >
+                {audioDevices.map((device) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label || `Audio Input (${device.deviceId.slice(0, 5)}...)`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Mic Connection Button */}
+          <button
+            id="mic-toggle-btn"
+            onClick={toggleMic}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2.5 cursor-pointer shadow-md ${
+              micConnected
+                ? 'bg-red-600 hover:bg-red-700 text-white shadow-[0_0_15px_rgba(220,38,38,0.25)]'
+                : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-[0_0_15px_rgba(79,70,229,0.25)]'
+            }`}
+          >
+            {micConnected ? (
+              <>
+                <MicOff className="w-4 h-4" />
+                Disconnect Audio Input
+              </>
+            ) : (
+              <>
+                <Mic className="w-4 h-4 animate-bounce" />
+                Connect Guitar Mic
+              </>
+            )}
+          </button>
+
+          {/* Quick Info/Help Button */}
+          <button
+            id="tutorial-toggle-btn"
+            onClick={() => setShowTutorial(!showTutorial)}
+            className="w-10 h-10 rounded-xl bg-neutral-900 border border-neutral-800 flex items-center justify-center text-neutral-400 hover:text-white hover:border-neutral-700 transition"
+            title="Toggle Guide"
+          >
+            <HelpCircle className="w-4 h-4" />
+          </button>
         </div>
       </header>
 
-      {/* Main Container Grid */}
-      <main className="max-w-7xl mx-auto px-6 md:px-12 mt-8 w-full space-y-6 flex-1">
+      {/* Main Workspace Layout */}
+      <main className="flex-1 p-6 max-w-7xl w-full mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
         
-        {/* Layout Row 1: Tuner and Guitar Settings */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Col 1 & 2: Tuner Dial Dial */}
-          <div className="lg:col-span-2">
-            <TunerDial 
-              pitchData={pitchData}
-              listening={listening}
-              tuning={tuning}
-              onPlayReferenceNote={handlePlayReferenceNote}
-            />
-          </div>
-
-          {/* Col 3: Audio Noise & Tuning Presets configuration */}
-          <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-xl flex flex-col justify-between">
-            <div>
-              <h3 className="font-display font-medium text-lg text-zinc-200 flex items-center gap-2 mb-4">
-                <Settings className="w-5 h-5 text-indigo-400" /> Audio Calibration
-              </h3>
-              <p className="text-xs text-zinc-500 mb-6">
-                Adjust thresholds to clean up background hums or configure drop tunings.
-              </p>
-
-              {/* Noise Gate Sensitivity */}
-              <div className="mb-6">
-                <div className="flex justify-between items-center text-xs font-mono text-zinc-400 mb-1.5">
-                  <span>Noise Gate (Threshold)</span>
-                  <span className="text-indigo-400 font-semibold">{noiseThreshold.toFixed(3)}</span>
+        {/* Responsive Info/Tutorial Board */}
+        <AnimatePresence>
+          {showTutorial && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="lg:col-span-12 overflow-hidden"
+            >
+              <div id="tutorial-alert" className="bg-gradient-to-r from-indigo-950/30 via-neutral-900 to-rose-950/10 border border-indigo-900/40 rounded-2xl p-5 flex gap-4 relative">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
+                  <Activity className="w-5 h-5 text-indigo-400" />
                 </div>
-                <input
-                  type="range"
-                  min="0.003"
-                  max="0.08"
-                  step="0.001"
-                  value={noiseThreshold}
-                  onChange={(e) => setNoiseThreshold(parseFloat(e.target.value))}
-                  className="w-full accent-indigo-500 cursor-pointer"
-                />
-                <div className="flex justify-between text-[10px] font-mono text-zinc-600 mt-1">
-                  <span>Ultra Sensitive</span>
-                  <span>Ignore Hum</span>
-                </div>
-              </div>
-
-              {/* Fretboard Tuning selector */}
-              <div className="mb-4">
-                <label className="block text-xs font-mono text-zinc-500 mb-2">Guitar Tuning Profile</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {TUNINGS.map((t) => (
-                    <button
-                      key={t.name}
-                      onClick={() => setTuning(t)}
-                      className={`py-2 px-3 text-xs rounded-xl border text-center transition font-mono cursor-pointer ${
-                        tuning.name === t.name
-                          ? 'bg-zinc-850 border-indigo-500 text-indigo-300'
-                          : 'bg-zinc-950/60 border-zinc-800 text-zinc-500 hover:text-zinc-300'
-                      }`}
-                    >
-                      {t.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Quick Tutorial Help Panel */}
-            <div className="bg-zinc-950/60 border border-zinc-850 p-4 rounded-2xl text-xs flex items-center gap-3">
-              <div className="shrink-0 w-8 h-8 rounded-xl bg-indigo-950/40 border border-indigo-800/40 flex items-center justify-center">
-                <HelpCircle className="w-4 h-4 text-indigo-400" />
-              </div>
-              <div className="text-[11px] leading-relaxed text-zinc-400">
-                <strong className="text-zinc-300">How to play:</strong> Plug in your guitar or select Microphone. Play single notes cleanly. The app converts pitches to synth and MIDI in real time.
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Layout Row 2: Interactive Fretboard */}
-        <GuitarFretboard 
-          tuning={tuning}
-          pitchData={pitchData}
-          activeSynthNotes={activeSynthNotes}
-          onFretPress={handleManualNoteOn}
-          onFretRelease={handleManualNoteOff}
-        />
-
-        {/* Layout Row 3: Synthesizer Parameters */}
-        <SynthPanel 
-          settings={synthSettings}
-          onSettingsChange={setSynthSettings}
-          presets={INSTRUMENT_PRESETS}
-        />
-
-        {/* Layout Row 4: Virtual Keyboard Playpen */}
-        <VirtualKeyboard 
-          activeSynthNotes={activeSynthNotes}
-          onNoteOn={handleManualNoteOn}
-          onNoteOff={handleManualNoteOff}
-        />
-
-        {/* Layout Row 5: Training & Metronome Beats Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Practice Metronome Rhythm looper */}
-          <DrumBeats audioContext={audioContextRef.current} />
-
-          {/* Practice Tutorial Scale Game */}
-          <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-xl flex flex-col justify-between min-h-64">
-            <div>
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="font-display font-medium text-lg text-zinc-200 flex items-center gap-2">
-                  <BookOpen className="w-5 h-5 text-indigo-400" /> Scale Training Lab
-                </h3>
-                {activeTutorial && (
-                  <button
-                    onClick={stopTutorial}
-                    className="text-xs text-rose-400 hover:text-rose-300 font-mono transition cursor-pointer"
-                  >
-                    Reset
-                  </button>
-                )}
-              </div>
-
-              {!activeTutorial ? (
-                <div className="space-y-3">
-                  <p className="text-xs text-zinc-500">
-                    Select a scale to practice. The game highlights target frets and checks your pitch accuracy in real-time.
+                <div>
+                  <h3 className="text-sm font-bold text-indigo-200">Welcome Back to your Guitar MIDI Studio!</h3>
+                  <p className="text-xs text-neutral-400 mt-1 max-w-4xl leading-relaxed">
+                    This advanced workstation converts audio frequency signals from your physical guitar into direct MIDI messages. Plug in your instrument, connect your microphone, and play. The DSP module tracks pitch, calculates deviation for fine-tuning, translates strings to actual guitar frets, triggers our high-fidelity polyphonic synthesizer, and streams output events to external hardware or DAW software.
                   </p>
-                  <div className="grid grid-cols-1 gap-2.5">
-                    {SCALE_TUTORIALS.map((tutorial) => (
-                      <button
-                        key={tutorial.name}
-                        onClick={() => startTutorial(tutorial)}
-                        className="flex items-center justify-between p-3 rounded-xl border border-zinc-800/80 bg-zinc-950/40 hover:bg-zinc-800/40 hover:border-zinc-700 transition cursor-pointer text-left"
-                      >
-                        <div>
-                          <h4 className="text-xs font-semibold text-zinc-200">{tutorial.name}</h4>
-                          <p className="text-[10px] text-zinc-500 mt-0.5 line-clamp-1">{tutorial.description}</p>
-                        </div>
-                        <ChevronRight className="w-4 h-4 text-zinc-500" />
-                      </button>
-                    ))}
+                  <div className="flex gap-4 mt-3 text-[11px] font-semibold text-indigo-300">
+                    <span className="flex items-center gap-1">⚡ Autocorrelation Pitch Solver</span>
+                    <span className="flex items-center gap-1">🎵 Standard Web MIDI Port Output</span>
+                    <span className="flex items-center gap-1">🥁 Integrated Drum Practice Station</span>
                   </div>
                 </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs font-mono text-zinc-400 font-semibold uppercase">{activeTutorial.name}</span>
-                    <span className="text-[10px] font-mono text-zinc-500">
-                      Step {tutorialIndex + 1} of {activeTutorial.notes.length}
-                    </span>
-                  </div>
+                <button
+                  onClick={() => setShowTutorial(false)}
+                  className="absolute top-4 right-4 text-xs text-neutral-500 hover:text-white"
+                >
+                  ✕ Dismiss
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-                  {tutorialSuccess ? (
-                    <div className="bg-emerald-950/40 border border-emerald-800/30 rounded-2xl p-4 flex flex-col items-center justify-center text-center">
-                      <Award className="w-8 h-8 text-emerald-400 mb-1.5 animate-bounce" />
-                      <h4 className="text-sm font-semibold text-emerald-300">Scale Completed!</h4>
-                      <p className="text-xs text-zinc-400 mt-1">Excellent pitch accuracy! Click Reset to try another.</p>
-                    </div>
-                  ) : (
-                    <div>
-                      {/* Active Note Target */}
-                      <div className="bg-zinc-950 p-4 rounded-2xl border border-zinc-850 flex items-center justify-between">
-                        <div>
-                          <span className="text-[10px] font-mono text-indigo-400 block">PLAY TARGET NOTE</span>
-                          <span className="font-display font-bold text-3xl text-zinc-100">
-                            {activeTutorial.notes[tutorialIndex].name}
-                          </span>
-                        </div>
-                        
-                        {/* Notes list horizontal guide */}
-                        <div className="flex items-center gap-1.5 font-mono text-[10px]">
-                          {activeTutorial.notes.map((n, idx) => {
-                            let style = 'bg-zinc-850 border border-zinc-800 text-zinc-500';
-                            if (idx < tutorialIndex) {
-                              style = 'bg-emerald-950/40 border border-emerald-800 text-emerald-400';
-                            } else if (idx === tutorialIndex) {
-                              style = 'bg-indigo-600 text-white font-bold animate-pulse scale-105';
-                            }
-                            return (
-                              <span key={idx} className={`w-7 h-7 rounded-lg flex items-center justify-center ${style}`}>
-                                {n.name.replace(/\d/, '')}
-                              </span>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+        {/* Left Column: Tuner and Drum Machine loops */}
+        <div className="lg:col-span-4 flex flex-col gap-6">
+          <div className="flex-1">
+            <TunerDial pitchData={pitchData} onPlayReference={playReferenceNote} />
+          </div>
+          <div className="flex-1">
+            <DrumBeats />
+          </div>
+        </div>
+
+        {/* Center/Right Column: Synthesizer, Visualizers, and MIDI logs */}
+        <div className="lg:col-span-8 flex flex-col gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Synth Engine Rack */}
+            <div className="h-full">
+              <SynthPanel settings={synthSettings} onChange={setSynthSettings} />
             </div>
 
-            {/* Note tracking tip */}
-            <div className="text-[10px] text-zinc-500 mt-4 border-t border-zinc-800/40 pt-3">
-              Play clearly. Ensure only one note is vibrating to enable optimal monophonic pitch lock.
+            {/* MIDI Output & Monitor */}
+            <div className="h-full">
+              <MidiConsole
+                logs={logs}
+                outputs={midiOutputs}
+                selectedOutputId={selectedOutputId}
+                onSelectOutput={handleSelectOutput}
+                onClearLogs={() => setLogs([])}
+              />
             </div>
           </div>
         </div>
 
-        {/* Layout Row 6: MIDI Log Panel */}
-        <MidiConsole 
-          logs={midiLogs}
-          outputs={midiOutputs}
-          selectedOutputId={selectedOutputId}
-          onSelectOutput={handleSelectMidiOutput}
-          onClearLogs={() => setMidiLogs([])}
-        />
-        
+        {/* Row 3: Interactive Virtual Interfaces (Keyboard and Fretboard) */}
+        <div className="lg:col-span-12 flex flex-col gap-6">
+          <GuitarFretboard
+            activeNotes={activeNotes}
+            onNoteOn={handleNoteOn}
+            onNoteOff={handleNoteOff}
+          />
+          <VirtualKeyboard
+            activeNotes={activeNotes}
+            onNoteOn={handleNoteOn}
+            onNoteOff={handleNoteOff}
+          />
+        </div>
       </main>
+
+      {/* Footer credits */}
+      <footer className="border-t border-neutral-900 bg-neutral-950/50 py-6 px-8 text-center text-xs text-neutral-600 flex justify-between items-center mt-12">
+        <div className="flex items-center gap-1.5 font-medium font-mono">
+          <span>HexaMIDI Studio</span>
+          <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+          <span>Local Engine Online</span>
+        </div>
+        <div className="flex items-center gap-1">
+          Crafted with precision for guitarists and producers
+          <Heart className="w-3.5 h-3.5 text-rose-500 fill-rose-500 inline mx-0.5" />
+        </div>
+      </footer>
     </div>
   );
 }
