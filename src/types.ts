@@ -32,6 +32,9 @@ export interface SynthSettings {
   delayWet?: number; // 0 to 0.8
   // Noise Gate Threshold
   noiseGate?: number; // -45 to -20 dB
+  // Feedback protection and noise suppression
+  echoCancellation?: boolean;
+  noiseSuppression?: boolean;
 }
 
 export interface PitchData {

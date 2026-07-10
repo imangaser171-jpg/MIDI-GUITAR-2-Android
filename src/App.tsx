@@ -12,10 +12,9 @@ import {
 import { PitchData, ActiveNote, MidiLogMessage, SynthSettings } from './types';
 import { PolySynth } from './utils/synthEngine';
 import { MidiManager } from './utils/midiManager';
-import { autoCorrelate, midiToFrequency } from './utils/pitchDetector';
+import { autoCorrelate, midiToFrequency, detectMultiplePitches } from './utils/pitchDetector';
 
 import { TunerDial } from './components/TunerDial';
-import { GuitarFretboard } from './components/GuitarFretboard';
 import { VirtualKeyboard } from './components/VirtualKeyboard';
 import { SynthPanel } from './components/SynthPanel';
 import { MidiConsole } from './components/MidiConsole';
@@ -38,7 +37,9 @@ const DEFAULT_SETTINGS: SynthSettings = {
   delayTime: 0.25,
   delayFeedback: 0.3,
   delayWet: 0.15,
-  noiseGate: -35
+  noiseGate: -35,
+  echoCancellation: true,
+  noiseSuppression: true
 };
 
 export default function App() {
@@ -139,12 +140,12 @@ export default function App() {
     synthRef.current.updateSettings(synthSettings);
   }, [synthSettings]);
 
-  // Automatically hot-restart mic streaming when Latency Mode is changed
+  // Automatically hot-restart mic streaming when Latency or Feedback settings are changed
   useEffect(() => {
     if (micConnected) {
       startMicCapture(selectedDeviceId);
     }
-  }, [synthSettings.latencyLevel]);
+  }, [synthSettings.latencyLevel, synthSettings.echoCancellation, synthSettings.noiseSuppression]);
 
   // Audio Input Capture Loop
   const startMicCapture = async (deviceIdToUse?: string) => {
@@ -179,8 +180,8 @@ export default function App() {
       // Access stream with requested device ID constraints if specified
       const constraints: MediaStreamConstraints = {
         audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
+          echoCancellation: synthSettings.echoCancellation !== false,
+          noiseSuppression: synthSettings.noiseSuppression !== false,
           autoGainControl: false,
           ...(activeDeviceId ? { deviceId: { exact: activeDeviceId } } : {}),
         },
@@ -230,6 +231,7 @@ export default function App() {
 
       const buffer = new Float32Array(analyser.fftSize);
       const historyBuffer = new Float32Array(2048);
+      const freqBuffer = new Float32Array(analyser.frequencyBinCount);
 
       // Pitch detection animation frame loop
       const detectLoop = () => {
@@ -278,29 +280,24 @@ export default function App() {
           return;
         }
         
-        // Dynamically adjust autocorrelation clarity confidence threshold based on latency selection
-        // ultra-low: 0.82, low: 0.85, balanced/high: 0.9 / 0.92
-        const clarityThreshold = 
-          synthSettings.latencyLevel === 'ultra-low' ? 0.82 :
-          synthSettings.latencyLevel === 'low' ? 0.85 : 
-          synthSettings.latencyLevel === 'high' ? 0.92 : 0.9;
-        
-        // We handle the noise gate check above, so pass a safe low threshold to autoCorrelate to prevent double-gating
-        const result = autoCorrelate(historyBuffer, audioContextRef.current!.sampleRate, -100, clarityThreshold);
-
-        // Filter out extreme high-pitch squeaks/noise and sub-bass rumble (limit to safe MIDI note range [24, 96])
-        const isPitchValid = result && result.midiNote >= 24 && result.midiNote <= 96;
-
         if (synthSettings.audioPolyphonyEnabled) {
-          // --- Poly-Strum String Resonance Mode ---
-          if (isPitchValid && result) {
-            setPitchData(result);
-            const note = result.midiNote;
+          // --- Poly-Strum String Resonance Mode (FFT Peak & Harmonic Elimination) ---
+          analyserRef.current.getFloatFrequencyData(freqBuffer);
+          const polyResults = detectMultiplePitches(
+            freqBuffer,
+            audioContextRef.current!.sampleRate,
+            gateThreshold,
+            6
+          );
 
+          const detectedMidiNotes = new Set(polyResults.map(p => p.midiNote));
+
+          // Trigger new notes and update active notes pitch bends
+          polyResults.forEach((result) => {
+            const note = result.midiNote;
             if (!activeAudioNotesRef.current.has(note)) {
               // Cap at 6 active voices (matching 6 guitar strings) to avoid overlap mud
               if (activeAudioNotesRef.current.size >= 6) {
-                // Find oldest note to release
                 let oldestNote = -1;
                 let oldestTime = Infinity;
                 activeAudioNotesRef.current.forEach((data, n) => {
@@ -324,22 +321,30 @@ export default function App() {
                 frequency: result.frequency,
               });
             } else {
-              // Note is already active, keep it ringing by updating lastSeen
+              // Note is already active, keep it ringing and apply microtonal pitch bends
               const existing = activeAudioNotesRef.current.get(note)!;
               existing.lastSeen = Date.now();
-              // Apply real-time microtonal pitch bends
-              midiManagerRef.current?.sendPitchBend(result.centsDeviation);
               synthRef.current.updateVoicePitch(note, result.centsDeviation);
             }
+          });
+
+          // Show the loudest detected note in the TunerDial
+          if (polyResults.length > 0) {
+            const loudest = [...polyResults].sort((a, b) => b.db - a.db)[0];
+            setPitchData(loudest);
           } else {
             setPitchData(null);
           }
 
-          // Scan and turn off notes that have exceeded the decay time
+          // Scan and turn off notes that have exceeded the decay time or are no longer playing
           const nowMs = Date.now();
           const decayMs = (synthSettings.audioPolyphonyDecay || 1.5) * 1000;
           activeAudioNotesRef.current.forEach((data, activeNote) => {
-            if (nowMs - data.lastSeen > decayMs) {
+            const isStillDetected = detectedMidiNotes.has(activeNote);
+            if (isStillDetected) {
+              data.lastSeen = nowMs;
+            } else if (nowMs - data.lastSeen > Math.min(250, decayMs)) {
+              // Debounce tracking dropouts with a 250ms grace-period
               synthRef.current.noteOff(activeNote);
               midiManagerRef.current?.sendNoteOff(activeNote);
               activeAudioNotesRef.current.delete(activeNote);
@@ -362,14 +367,21 @@ export default function App() {
           ]);
 
         } else {
-          // --- Standard Monophonic Mode ---
+          // --- Standard Monophonic Mode (Autocorrelation) ---
+          const clarityThreshold = 
+            synthSettings.latencyLevel === 'ultra-low' ? 0.82 :
+            synthSettings.latencyLevel === 'low' ? 0.85 : 
+            synthSettings.latencyLevel === 'high' ? 0.92 : 0.9;
+          
+          const result = autoCorrelate(historyBuffer, audioContextRef.current!.sampleRate, -100, clarityThreshold);
+          const isPitchValid = result && result.midiNote >= 24 && result.midiNote <= 96;
+
           if (isPitchValid && result) {
             setPitchData(result);
             const note = result.midiNote;
 
             if (currentAudioNoteRef.current !== note) {
               const oldNote = currentAudioNoteRef.current;
-              // Check if the old voice actually exists in the synth to prevent stuck notes
               if (synthSettings.glide > 0 && oldNote !== null && synthRef.current.hasVoice(oldNote)) {
                 // Smooth Glide / Portamento transition
                 synthRef.current.glideVoice(oldNote, note, synthSettings.glide);
@@ -408,14 +420,12 @@ export default function App() {
                 currentAudioNoteRef.current = note;
               }
             } else {
-              // Pitch Bend adjustments for fine tuning/vibrato expression
+              // Fine tuning/vibrato expression updates
               midiManagerRef.current?.sendPitchBend(result.centsDeviation);
-              // Update physical oscillators in real time with cents deviation
               synthRef.current.updateVoicePitch(note, result.centsDeviation);
             }
           } else {
             setPitchData(null);
-            // Release notes if signal cuts out
             if (currentAudioNoteRef.current !== null) {
               synthRef.current.noteOff(currentAudioNoteRef.current);
               midiManagerRef.current?.sendNoteOff(currentAudioNoteRef.current);
@@ -665,13 +675,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* Row 3: Interactive Virtual Interfaces (Keyboard and Fretboard) */}
+        {/* Row 3: Interactive Virtual Interface (Keyboard) */}
         <div className="lg:col-span-12 flex flex-col gap-6">
-          <GuitarFretboard
-            activeNotes={activeNotes}
-            onNoteOn={handleNoteOn}
-            onNoteOff={handleNoteOff}
-          />
           <VirtualKeyboard
             activeNotes={activeNotes}
             onNoteOn={handleNoteOn}

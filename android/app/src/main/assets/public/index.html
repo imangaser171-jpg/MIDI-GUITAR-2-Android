@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/jpeg" href="/icon.jpg" />
+    <link rel="apple-touch-icon" href="/icon.jpg" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#09090b" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Pro Talkbox & Voice Box Synthesizer</title>
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then((registrations) => {
+          let cleared = false;
+          for (let registration of registrations) {
+            registration.unregister();
+            cleared = true;
+          }
+          if (cleared && window.caches) {
+            caches.keys().then((keys) => {
+              return Promise.all(keys.map((key) => caches.delete(key)));
+            }).then(() => {
+              window.location.reload();
+            });
+          }
+        });
+      }
+    </script>
+    <script type="module" crossorigin src="/assets/index-A-JHLytg.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-B6H4WzBC.css">
+  </head>
+  <body class="bg-zinc-950 text-zinc-50 min-h-screen">
+    <div id="root"></div>
+  </body>
+</html>

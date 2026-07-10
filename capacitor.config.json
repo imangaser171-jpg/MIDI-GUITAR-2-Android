@@ -1,0 +1,6 @@
+{
+  "appId": "com.voiceboxsynth.app",
+  "appName": "Voice Box Synth",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}

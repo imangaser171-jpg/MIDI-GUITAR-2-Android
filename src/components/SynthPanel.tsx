@@ -877,6 +877,49 @@ export function SynthPanel({ settings, onChange }: SynthPanelProps) {
                   </p>
                 </div>
 
+                {/* USB & Mobile Feedback Protection Toggles */}
+                <div className="border-t border-neutral-900 pt-3.5 space-y-3">
+                  <span className="text-[10px] text-neutral-400 font-semibold uppercase tracking-wider block">3. USB & Mobile Feedback Protection</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-neutral-950/80 p-2.5 rounded-xl border border-neutral-900">
+                    <div className="flex items-center justify-between">
+                      <div className="flex flex-col">
+                        <span className="text-[11px] font-bold text-neutral-300">Feedback Shield</span>
+                        <span className="text-[9px] text-neutral-500">Acoustic Echo Cancel</span>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          id="echo-cancel-toggle"
+                          type="checkbox"
+                          checked={settings.echoCancellation !== false}
+                          onChange={(e) => updateSetting('echoCancellation', e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-7 h-4 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-300 after:border-neutral-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-emerald-600"></div>
+                      </label>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <div className="flex flex-col">
+                        <span className="text-[11px] font-bold text-neutral-300">Hum Suppression</span>
+                        <span className="text-[9px] text-neutral-500">Interference Filter</span>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          id="noise-suppress-toggle"
+                          type="checkbox"
+                          checked={settings.noiseSuppression !== false}
+                          onChange={(e) => updateSetting('noiseSuppression', e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-7 h-4 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-300 after:border-neutral-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-emerald-600"></div>
+                      </label>
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-neutral-500 leading-normal">
+                    ⚠️ <span className="text-neutral-400">Feedback Warning:</span> If your device has high-gain howling or loopback when using USB/Guitar interface, keep **Feedback Shield** on. Turn off only for pristine, raw analog pickup signals with high-quality headphones.
+                  </p>
+                </div>
+
                 <p className="text-[10px] text-neutral-500 leading-relaxed border-t border-neutral-900 pt-2">
                   💡 <span className="text-neutral-400">Android 15 Tip:</span> On devices like the Samsung A14, choose <span className="text-indigo-400 font-semibold">Ultra Snappy</span> (512 buffer) for instant speed or <span className="text-indigo-400 font-semibold">Low Latency</span> (1024 buffer) for standard play. Avoid Bluetooth audio as it adds over 150ms of lag!
                 </p>

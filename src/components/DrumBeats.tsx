@@ -19,6 +19,16 @@ const PATTERNS: Record<string, { kick: boolean[]; snare: boolean[]; hihat: boole
     snare: [false, false, true,  false, false, true,  true,  false],
     hihat: [true,  true,  true,  true,  true,  true,  true,  true],
   },
+  'Heavy Metal': {
+    kick:  [true,  true,  false, true,  true,  true,  false, true],
+    snare: [false, false, true,  false, false, false, true,  false],
+    hihat: [true,  true,  true,  true,  true,  true,  true,  true],
+  },
+  'Hardcore': {
+    kick:  [true,  false, true,  false, true,  false, true,  false],
+    snare: [false, true,  false, true,  false, true,  false, true],
+    hihat: [true,  true,  true,  true,  true,  true,  true,  true],
+  },
   'Metronome': {
     kick:  [true,  false, true,  false, true,  false, true,  false],
     snare: [false, false, false, false, false, false, false, false],
